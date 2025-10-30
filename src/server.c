@@ -4,8 +4,9 @@
 #include <netdb.h>
 #include <stdio.h>
 #include <unistd.h>
+#include "./../include/http.h"
 
-#define BUF_SIZE 1024
+#define BUF_SIZE 8192
 #define PORT "8080"  // the port users will be connecting to
 #define BACKLOG 10 // how many pending connections queue will hold
 
@@ -41,6 +42,29 @@ int close_connection(int fd, fd_set* master, int do_shutdown) {
     return 0;
 }
 
+int handle_http_request(char* buffer, char** response_buffer) {
+    HttpRequest request;
+    HttpResponse response;
+    int get_default_response_result = get_default_response(&response);
+    if (get_default_response_result != 0) {
+        return -1;
+    }
+    response.body = "Hello World!";
+
+    enum parse_http_request_error parse_http_result = parse_http_request(buffer, &request);
+    if (parse_http_result != PARSE_HTTP_REQUEST_SUCCESS) {
+        strcpy(response.status_code, "400");
+        strcpy(response.status_message, "Bad Request");
+        response.body = "Bad Request";
+        return response_to_buffer(&response, response_buffer);
+    }
+
+    int result = response_to_buffer(&response, response_buffer);
+    free_http_response(&response);
+    free_http_request(&request);
+    return result;
+}
+
 int handle_client_receive(int fd, fd_set* master) {
     char buffer[BUF_SIZE];
     int bytes = recv(fd, buffer, sizeof buffer, 0); // receive data from the socket
@@ -54,15 +78,20 @@ int handle_client_receive(int fd, fd_set* master) {
         // client disconnected
         return close_connection(fd, master, 0);
     } else {
-        // echo the message back
+        // Handle HTTP request
         buffer[bytes] = '\0';
-        int send_result = send(fd, buffer, bytes, 0); // send the data back to the socket
+        char* response_buffer = NULL;
+        handle_http_request(buffer, &response_buffer);
+        int send_result = send(fd, response_buffer, strlen(response_buffer), 0); // send the data back to the socket
         if (send_result < 0) {
             perror("send");
+            free(response_buffer);
             close_connection(fd, master, 0);
             return -1;
         }
-        printf("Send:\n%s\nTo: %d\n\n", buffer, fd);
+        close_connection(fd, master, 1);
+        printf("Send:\n%s\nTo: %d\n\n", response_buffer, fd);
+        free(response_buffer);
     }
     return 0;
 }
