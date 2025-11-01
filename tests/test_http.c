@@ -7,7 +7,7 @@
 void test_http_request_parsing(void) {
     printf("Testing HTTP request parsing...\n");
     
-    char request[] = "GET /index.html HTTP/1.0\r\n \
+    char request[] = "GET /index%20test.html HTTP/1.0\r\n \
         Host: localhost\r\n \
         User-Agent: test\r\n \
         \r\n";
@@ -16,7 +16,7 @@ void test_http_request_parsing(void) {
     int result = parse_http_request(request, &req);
     assert(result == 0);
     assert(strcmp(req.method, "GET") == 0);
-    assert(strcmp(req.path, "/index.html") == 0);
+    assert(strcmp(req.path, "/index test.html") == 0);
     char test[] = "Host";
     char* value = NULL;
 
@@ -33,15 +33,16 @@ void test_http_response_creation(void) {
     printf("Testing HTTP response creation...\n");
     
     HttpResponse res;
-    int result = get_default_response(&res);
-    assert(result == 0);
+    int init_http_response_result = init_http_response(&res);
+    int get_default_response_result = get_default_response(&res);
+    assert(init_http_response_result == 0);
+    assert(get_default_response_result == 0);
     assert(res.headers != NULL);
     
     // Check default headers
     char* server_value = NULL;
     char server_key[] = "Server";
-    result = string_hashmap_get(res.headers, server_key, strlen(server_key), &server_value);
-    printf("server_value: %s\n", server_value);
+    int result = string_hashmap_get(res.headers, server_key, strlen(server_key), &server_value);
     assert(result == HASHMAP_SUCCESS);
     assert(strcmp(server_value, "C-WebServer/1.0") == 0);
     
@@ -64,8 +65,11 @@ void test_http_response_to_buffer(void) {
     printf("Testing HTTP response to buffer conversion...\n");
     
     HttpResponse res;
-    get_default_response(&res);
-    res.body = "Hello, World!";
+    int init_http_response_result = init_http_response(&res);
+    int get_default_response_result = get_default_response(&res);
+    assert(init_http_response_result == 0);
+    assert(get_default_response_result == 0);
+    res.body = strdup("Hello, World!");
     
     char* buffer = NULL;
     int result = response_to_buffer(&res, &buffer);
@@ -94,6 +98,8 @@ void test_http_response_custom_headers(void) {
     printf("Testing HTTP response with custom headers...\n");
     
     HttpResponse res;
+    int result = init_http_response(&res);
+    assert(result == 0);
     get_default_response(&res);
     
     // Add custom headers
@@ -112,7 +118,7 @@ void test_http_response_custom_headers(void) {
     string_hashmap_size(res.headers, &size);
     assert(size == 4);
     
-    res.body = "Hello, World!";
+    res.body = strdup("Hello, World!");
     char* buffer = NULL;
     response_to_buffer(&res, &buffer);
     

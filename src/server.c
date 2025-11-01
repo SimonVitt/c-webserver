@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "./../include/http.h"
+#include "./../include/static_file.h"
 
 #define BUF_SIZE 8192
 #define PORT "8080"  // the port users will be connecting to
@@ -12,8 +13,8 @@
 
 int handle_new_connection(int server_socket, fd_set* master, int* fdmax) {
     struct sockaddr_storage client_addr; // ip... address of the client
-    socklen_t addr_size = sizeof client_addr; // soze of the ip... address of the client
-    int new_fd = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfe of sombeody who wrote/(wants to write?) to this socket. Now we can read and write from there
+    socklen_t addr_size = sizeof client_addr; // size of the ip... address of the client
+    int new_fd = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there
     if (new_fd < 0) {
         perror("accept");
         return -1;
@@ -45,18 +46,16 @@ int close_connection(int fd, fd_set* master, int do_shutdown) {
 int handle_http_request(char* buffer, char** response_buffer) {
     HttpRequest request;
     HttpResponse response;
-    int get_default_response_result = get_default_response(&response);
-    if (get_default_response_result != 0) {
-        return -1;
-    }
-    response.body = "Hello World!";
-
+    init_http_request(&request);
+    init_http_response(&response);
+    get_default_response(&response);
+    
     enum parse_http_request_error parse_http_result = parse_http_request(buffer, &request);
     if (parse_http_result != PARSE_HTTP_REQUEST_SUCCESS) {
-        strcpy(response.status_code, "400");
-        strcpy(response.status_message, "Bad Request");
-        response.body = "Bad Request";
-        return response_to_buffer(&response, response_buffer);
+        printf("Bad Request - %s\n", buffer);
+        serve_static_file(ERROR_400_PATH, &response);
+    } else {
+        serve_static_file(request.path, &response);
     }
 
     int result = response_to_buffer(&response, response_buffer);
@@ -79,7 +78,12 @@ int handle_client_receive(int fd, fd_set* master) {
         return close_connection(fd, master, 0);
     } else {
         // Handle HTTP request
-        buffer[bytes] = '\0';
+        if (bytes >= BUF_SIZE) {
+            buffer[bytes - 1] = '\0';
+        } else {
+            buffer[bytes] = '\0';
+        }
+        
         char* response_buffer = NULL;
         handle_http_request(buffer, &response_buffer);
         int send_result = send(fd, response_buffer, strlen(response_buffer), 0); // send the data back to the socket
@@ -109,7 +113,6 @@ int server_run(void) {
     int getaddrinfo_result = getaddrinfo(NULL, PORT, &hints, &res);
     if (getaddrinfo_result != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(getaddrinfo_result));
-        freeaddrinfo(res);
         return -1;
     }
 

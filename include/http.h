@@ -25,9 +25,11 @@ enum parse_http_request_error {
 };
 
 int parse_http_request(const char* buffer, HttpRequest* req);
+int init_http_request(HttpRequest* req);
 int free_http_request(HttpRequest* req);
 
 // Response functions
+int init_http_response(HttpResponse* res);
 int get_default_response(HttpResponse* res);
 int free_http_response(HttpResponse* res);
 int response_to_buffer(HttpResponse* res, char** buffer);
