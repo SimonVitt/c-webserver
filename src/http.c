@@ -62,7 +62,7 @@ enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRe
     return PARSE_HTTP_REQUEST_SUCCESS;
 }
 
-enum parse_http_request_error parse_http_request_headers(const char* buffer, HttpRequest* req) {
+enum parse_http_request_error parse_http_request_headers_internal(const char* buffer, HttpRequest* req) {
     char* buffer_copy = malloc(sizeof(char) * (strlen(buffer) + 1));
     strcpy(buffer_copy, buffer);
 
@@ -115,7 +115,7 @@ enum parse_http_request_error parse_http_request_headers(const char* buffer, Htt
     return PARSE_HTTP_REQUEST_SUCCESS;
 }
 
-int parse_http_request(const char* buffer, HttpRequest* req) {
+int parse_http_request_headers(const char* buffer, HttpRequest* req) {
     req->headers = string_hashmap_t_create();
     if (req->headers == NULL) {
         return -1;
@@ -126,12 +126,17 @@ int parse_http_request(const char* buffer, HttpRequest* req) {
         return parse_http_request_line_result;
     }
 
-    enum parse_http_request_error parse_http_request_headers_result = parse_http_request_headers(buffer, req);
+    enum parse_http_request_error parse_http_request_headers_result = parse_http_request_headers_internal(buffer, req);
     if (parse_http_request_headers_result != PARSE_HTTP_REQUEST_SUCCESS) {
         return parse_http_request_headers_result;
     }
 
     return PARSE_HTTP_REQUEST_SUCCESS;
+}
+
+int parse_http_request_body(const char* buffer, HttpRequest* req) {
+    // To be implemented
+    return 0;
 }
 
 int init_http_request(HttpRequest* req) {
@@ -156,6 +161,7 @@ int init_http_response(HttpResponse* res) {
     res->version[0] = '\0';
     res->headers = NULL;
     res->body = NULL;
+    res->body_length = 0;
     return 0;
 }
 
@@ -196,8 +202,10 @@ int response_to_buffer(HttpResponse* res, char** buffer) {
 
     string_hashmap_foreach(res->headers, response_header_append_callback, sb);
     string_builder_append_string(sb, "\r\n");
+    
+    string_builder_length(sb, &res->headers_length);
 
-    string_builder_append_string(sb, res->body);
+    string_builder_append_string_n(sb, res->body, res->body_length);
 
     string_builder_to_string(sb, buffer);
 

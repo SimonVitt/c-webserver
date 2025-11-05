@@ -13,7 +13,7 @@ void test_http_request_parsing(void) {
         \r\n";
 
     HttpRequest req;
-    int result = parse_http_request(request, &req);
+    int result = parse_http_request_headers(request, &req);
     assert(result == 0);
     assert(strcmp(req.method, "GET") == 0);
     assert(strcmp(req.path, "/index test.html") == 0);

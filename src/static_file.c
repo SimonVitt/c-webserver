@@ -27,6 +27,21 @@ int set_content_type(HttpResponse* response, const char* ext) {
         strcpy(content_type, "text/plain");
     } else if (strcmp(ext, ".png") == 0) {
         strcpy(content_type, "image/png");
+    } else if (strcmp(ext, ".jpg") == 0) {
+        strcpy(content_type, "image/jpeg");
+    } else if (strcmp(ext, ".gif") == 0) {
+        strcpy(content_type, "image/gif");
+    } else if (strcmp(ext, ".svg") == 0) {
+        strcpy(content_type, "image/svg+xml");
+    } else if (strcmp(ext, ".ico") == 0) {
+        strcpy(content_type, "image/x-icon");
+    } else if (strcmp(ext, ".webp") == 0) {
+        strcpy(content_type, "image/webp");
+    } else if (strcmp(ext, ".mp4") == 0) {
+        strcpy(content_type, "video/mp4");
+    } else if (strcmp(ext, ".webm") == 0) {
+        strcpy(content_type, "video/webm");
+    } else if (strcmp(ext, ".ogg") == 0) {
     } else {
         strcpy(content_type, "application/octet-stream");
     }
@@ -49,7 +64,7 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
     if (file == NULL) {
         return -1;
     }
-    char *content = malloc(st->st_size + 1); // create a buffer to store the file content
+    char *content = malloc(st->st_size); // create a buffer to store the file content
     if (content == NULL) {
         fclose(file);
         return -1;
@@ -60,7 +75,7 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
         fclose(file);
         return -1;
     }
-    content[st->st_size] = '\0'; // add the null terminator to the end of the buffer
+    response->body_length = st->st_size;
     fclose(file);
     response->body = content; // set the body of the response
 
@@ -69,7 +84,7 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
         ext = "";
     }
     set_content_type(response, ext); // set the content type of the response
-    set_content_length(response, st->st_size); // set the content length of the response
+    set_content_length(response, response->body_length); // set the content length of the response
     return 0;
 }
 
@@ -79,6 +94,7 @@ int set_error_response(HttpResponse* response, const char* status_code, const ch
     struct stat st;
     if (stat(file_path, &st) != 0) {
         response->body = strdup("<html><body><h1>Error</h1></body></html>"); // Dynamically allocate the body
+        response->body_length = strlen(response->body);
         if (response->body == NULL) {
             return -1;
         }

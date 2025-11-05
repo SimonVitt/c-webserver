@@ -16,7 +16,9 @@ typedef struct {
     char status_message[256]; // "OK", "Not Found", etc.
     char version[16]; // "HTTP/1.0"
     struct string_hashmap_t* headers; // your hashmap for headers
+    size_t headers_length; // the length of the headers
     char* body; // the body of the response
+    size_t body_length; // the length of the body
 } HttpResponse;
 
 enum parse_http_request_error {
@@ -24,7 +26,8 @@ enum parse_http_request_error {
     PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST = -1
 };
 
-int parse_http_request(const char* buffer, HttpRequest* req);
+int parse_http_request_headers(const char* buffer, HttpRequest* req);
+int parse_http_request_body(const char* buffer, HttpRequest* req);
 int init_http_request(HttpRequest* req);
 int free_http_request(HttpRequest* req);
 
