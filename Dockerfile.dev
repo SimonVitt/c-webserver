@@ -1,0 +1,10 @@
+# Use Alpine-based GCC (much smaller: ~200MB vs 1.5GB)
+FROM alpine:latest
+
+# Install only what you need
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    make
+
+WORKDIR /app

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include "./../include/utils/string_builder.h"
 
 #define DEFAULT_STRING_BUILDER_STRING_CAPACITY 4096

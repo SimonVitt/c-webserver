@@ -1,5 +1,5 @@
-CC = clang
-CFLAGS = -std=c99 -Wall -Werror -Iinclude
+CC = gcc
+CFLAGS = -std=gnu99 -Wall -Werror -Iinclude
 SRC = src/main.c src/server.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c src/static_file.c
 TESTS_HTTP = tests/test_http.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c src/static_file.c
 TESTS_STATIC = tests/test_static_file.c src/static_file.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c
