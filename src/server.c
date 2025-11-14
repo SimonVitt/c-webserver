@@ -1,9 +1,10 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <netdb.h>
 #include <stdio.h>
-#include <sys/select.h>
 #include <unistd.h>
 #include <time.h>
 #include <stdlib.h>
@@ -11,15 +12,17 @@
 #include "./../include/static_file.h"
 #include "./../include/server.h"
 
-#define MAX_CLIENTS 100
+#define MAX_EVENTS 128
+#define MAX_CLIENTS 20000 // the maximum number of clients that can be connected to the server
 #define PORT "8080"  // the port users will be connecting to
-#define BACKLOG 10 // how many pending connections queue will hold
+#define BACKLOG 512 // how many pending connections queue will hold
 
 typedef struct {
-    Client* clients; // We use 
-    fd_set master;
-    int fdmax;
+    Client* clients; // We use an array of clients to store the clients that are connected to the server. the client will always be at the index of the file descriptor of the socket. We dont use a hashmap because this would cause of memory overhead (more often mallocing and freeing memory).
+    int epfd; // epoll file descriptor
     int server_socket;
+    int active_connections;
+    int* active_fds;
 } ServerState;
 
 int handle_new_connection(ServerState* server_state) {
@@ -29,12 +32,22 @@ int handle_new_connection(ServerState* server_state) {
     if (new_fd < 0) {
         perror("accept");
         return -1;
-    } else if (new_fd >= MAX_CLIENTS) {
-        perror("Too many clients");
+    } else if (server_state->active_connections >= MAX_CLIENTS) {
+        perror("Max clients reached\n");
+        close(new_fd); // we close directly without close_connection because we it wasnt a client yet and not counted in the active_connections
         return -1;
     }
-    FD_SET(new_fd, &server_state->master); // add the new socket to the master set
-    if (new_fd > server_state->fdmax) server_state->fdmax = new_fd; // update the highest file descriptor number
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = new_fd;
+    if (epoll_ctl(server_state->epfd, EPOLL_CTL_ADD, new_fd, &ev) < 0) {
+        perror("epoll_ctl: add client");
+        close(new_fd); // we close directly without close_connection because we it wasnt a client yet and not counted in the active_connections
+        return -1;
+    }
+    server_state->active_fds[server_state->active_connections] = new_fd;
+    server_state->active_connections++;
+
     server_state->clients[new_fd].bytes_received = 0;
     server_state->clients[new_fd].last_activity = time(NULL);
     server_state->clients[new_fd].state = CLIENT_STATE_IDLE;
@@ -72,7 +85,11 @@ int free_client(Client* client) {
     return 0;
 }
 
-int close_connection(int fd, fd_set* master, int do_shutdown) {
+int close_connection(int fd, ServerState* server_state, int do_shutdown) {
+    if (epoll_ctl(server_state->epfd, EPOLL_CTL_DEL, fd, NULL) < 0) {
+        perror("epoll_ctl: delete client");
+        return -1;
+    }
     if (do_shutdown) {
         int shutdown_result = shutdown(fd, SHUT_RDWR); // close the socket for reading and writing first, so the peer is notified of the closure
         if (shutdown_result < 0) {
@@ -85,8 +102,15 @@ int close_connection(int fd, fd_set* master, int do_shutdown) {
         perror("close");
         return -1;
     }
-    FD_CLR(fd, master); // remove the socket from the master set
     printf("Disconnected: %d\n\n", fd);
+    for (int i = 0; i < server_state->active_connections; i++) {
+        if (server_state->active_fds[i] == fd) {
+            // Swap with last element
+            server_state->active_fds[i] = server_state->active_fds[server_state->active_connections - 1];
+            break;
+        }
+    }
+    server_state->active_connections--;
     return 0;
 }
 
@@ -193,7 +217,7 @@ int handle_client_receive(int fd, ServerState* server_state) {
     if (bytes < 0) {
         perror("recv");
         free_client(client);
-        close_connection(fd, &server_state->master, 0);
+        close_connection(fd, server_state, 0);
         return -1;
     }
 
@@ -202,13 +226,14 @@ int handle_client_receive(int fd, ServerState* server_state) {
     
     if (bytes == 0) {
         // client disconnected
-        return close_connection(fd, &server_state->master, 0);
+        free_client(client);
+        return close_connection(fd, server_state, 0);
     } 
 
     if (client->bytes_received > BUF_SIZE) {
         perror("Client sent too much data");
         free_client(client);
-        return close_connection(fd, &server_state->master, 0);
+        return close_connection(fd, server_state, 0);
     } 
 
     client->buffer[client->bytes_received] = '\0';
@@ -220,12 +245,12 @@ int handle_client_receive(int fd, ServerState* server_state) {
         if (send_result < 0) {
             perror("send");
             free_client(client);
-            close_connection(fd, &server_state->master, 0);
+            close_connection(fd, server_state, 0);
             return -1;
         }
-        close_connection(fd, &server_state->master, 1);
         printf("Send:\n%s\nTo: %d\n\n", client->response_buffer, fd);
         free_client(client);
+        close_connection(fd, server_state, 1);
     }
 
     return 0;
@@ -233,15 +258,12 @@ int handle_client_receive(int fd, ServerState* server_state) {
 
 int handle_timed_out_clients(ServerState* server_state) {
     time_t now = time(NULL);
-    for (int i = 3; i <= server_state->fdmax; i++) {
-        if (!FD_ISSET(i, &server_state->master)) {
-            continue;
-        }
-        if (server_state->clients[i].last_activity != 0 &&
-            now - server_state->clients[i].last_activity > 30) {  // 30 sec timeout
-            printf("Timeout: closing fd=%d\n", i);
-            free_client(&server_state->clients[i]);
-            close_connection(i, &server_state->master, 1);
+    for (int i = server_state->active_connections - 1; i >= 0; i--) { // we iterate backwards because we are removing elements from the array in close_connection
+        int fd = server_state->active_fds[i];
+        if (server_state->clients[fd].last_activity != 0 && (now - server_state->clients[fd].last_activity > 30)) {  // 30 sec timeout
+            printf("Timeout: closing fd=%d\n", fd);
+            free_client(&server_state->clients[fd]);
+            close_connection(fd, server_state, 1);
         }
     }
     return 0;
@@ -249,12 +271,17 @@ int handle_timed_out_clients(ServerState* server_state) {
 
 int server_run(void) {
     ServerState server_state;
+    server_state.active_connections = 0;
+    server_state.active_fds = malloc(MAX_CLIENTS * sizeof(int));
+    if (server_state.active_fds == NULL) {
+        perror("malloc");
+        return -1;
+    }
     server_state.clients = calloc(MAX_CLIENTS, sizeof(Client));
     if (server_state.clients == NULL) {
         perror("malloc");
         return -1;
     }
-    server_state.fdmax = 0;
 
     struct addrinfo hints, *res; // hints is where we put our own data and say how we want a connection. Res is a pointer to a linked list with possible addresses
     int server_socket; // sockets, server_socket for server, new_fd for client
@@ -297,32 +324,55 @@ int server_run(void) {
         return -1;
     }
 
-    FD_ZERO(&server_state.master);
-    FD_SET(server_state.server_socket, &server_state.master); // start watching the listening socket
-    server_state.fdmax = server_state.server_socket;
+    server_state.epfd = epoll_create1(0); // create an epoll instance
+    if (server_state.epfd < 0) {
+        perror("epoll_create1");
+        return -1;
+    }
 
-    fd_set read_fds;
+    struct epoll_event ev;
+    struct epoll_event events[MAX_EVENTS];
+
+    ev.events = EPOLLIN;
+    ev.data.fd = server_state.server_socket;
+    epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, server_state.server_socket, &ev);
+
+    // Add timer to epoll
+    int timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
+
+    struct itimerspec timer_spec;
+    timer_spec.it_value.tv_sec = 5;      // First expiration in 5 seconds
+    timer_spec.it_value.tv_nsec = 0;
+    timer_spec.it_interval.tv_sec = 5;   // Then every 5 seconds
+    timer_spec.it_interval.tv_nsec = 0;
+
+    timerfd_settime(timer_fd, 0, &timer_spec, NULL);
+
+    // Add timer to epoll
+    struct epoll_event timer_ev;
+    timer_ev.events = EPOLLIN;
+    timer_ev.data.fd = timer_fd;
+    epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, timer_fd, &timer_ev);
 
     while (1){
-        read_fds = server_state.master; // copy it so select doesn't mess it up
 
-        handle_timed_out_clients(&server_state);
-
-        int select_result = select(server_state.fdmax + 1, &read_fds, NULL, NULL, NULL); // highest file descriptor number + 1, read_fds, write_fds, except_fds, timeout
-        if (select_result < 0) {
-            perror("select");
+        int n = epoll_wait(server_state.epfd, events, MAX_EVENTS, -1);
+        if (n < 0) {
+            perror("epoll_wait");
             continue;
         }
 
-        for (int i = 0; i <= server_state.fdmax; i++) {
-            if (FD_ISSET(i, &read_fds)){ // check if the socket is set in the read_fds set
-                if (i == server_socket){ // if the socket is the server socket, accept a new connection
-                    handle_new_connection(&server_state);
-                }else{
-                    handle_client_receive(i, &server_state);
-                }
+        for (int i = 0; i < n; i++) {
+            if (events[i].data.fd == server_state.server_socket) {
+                handle_new_connection(&server_state);
+            } else if (events[i].data.fd == timer_fd) {
+                size_t expirations;
+                read(timer_fd, &expirations, sizeof(expirations));
+                handle_timed_out_clients(&server_state);
+            } else {
+                handle_client_receive(events[i].data.fd, &server_state);
             }
-        }        
+        }
     }
     return 0;
 }
