@@ -2,6 +2,7 @@
 #define SERVER_H
 
 #include <time.h>
+#include <sys/time.h>
 #include "./http.h"
 
 #define BUF_SIZE 8192
@@ -29,6 +30,10 @@ typedef struct {
 
     HttpResponse* response;
     char* response_buffer;
+
+    struct timeval request_start;
+
+    size_t bytes_sent;
 } Client;
 
 int server_run(void);

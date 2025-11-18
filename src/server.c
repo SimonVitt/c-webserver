@@ -7,7 +7,10 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdlib.h>
+#include <fcntl.h>   // For fcntl() and O_NONBLOCK
+#include <errno.h>
 #include "./../include/http.h"
 #include "./../include/static_file.h"
 #include "./../include/server.h"
@@ -25,10 +28,38 @@ typedef struct {
     int* active_fds;
 } ServerState;
 
+void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    struct tm* gmt = gmtime(&tv.tv_sec);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", gmt);
+    
+    char timestamp_with_ms[80];
+    int ms = (int)(tv.tv_usec / 1000);
+    snprintf(timestamp_with_ms, sizeof(timestamp_with_ms), "%s.%03d", timestamp, ms);
+    
+    printf("[REQUEST] [%s GMT] %s %s %s - %s %s (%.2fms)\n",
+           timestamp_with_ms,
+           req->method,
+           req->path,
+           req->version,
+           res->status_code,
+           res->status_message,
+           time_ms);
+}
+
 int handle_new_connection(ServerState* server_state) {
     struct sockaddr_storage client_addr; // ip... address of the client
     socklen_t addr_size = sizeof client_addr; // size of the ip... address of the client
-    int new_fd = accept(server_state->server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there
+    int new_fd = accept(server_state->server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there    
+    
+    int send_buf_size = 1024;  // 1KB - very small!
+    if (setsockopt(new_fd, SOL_SOCKET, SO_SNDBUF, &send_buf_size, sizeof(send_buf_size)) < 0) {
+        perror("setsockopt SO_SNDBUF");
+    }
+    
     if (new_fd < 0) {
         perror("accept");
         return -1;
@@ -37,6 +68,20 @@ int handle_new_connection(ServerState* server_state) {
         close(new_fd); // we close directly without close_connection because we it wasnt a client yet and not counted in the active_connections
         return -1;
     }
+
+    // Make socket non-blocking
+    int flags = fcntl(new_fd, F_GETFL, 0); // get the current flags of the socket
+    if (flags < 0) {
+        perror("fcntl F_GETFL");
+        close(new_fd);
+        return -1;
+    }
+    if (fcntl(new_fd, F_SETFL, flags | O_NONBLOCK) < 0) { // set the flags of the socket to the current flags and O_NONBLOCK
+        perror("fcntl F_SETFL");
+        close(new_fd);
+        return -1;
+    }
+
     struct epoll_event ev;
     ev.events = EPOLLIN;
     ev.data.fd = new_fd;
@@ -57,7 +102,9 @@ int handle_new_connection(ServerState* server_state) {
     server_state->clients[new_fd].body_bytes_received = 0;
     server_state->clients[new_fd].response = NULL;
     server_state->clients[new_fd].response_buffer = NULL;
-    printf("Connected: %d\n\n", new_fd);
+    server_state->clients[new_fd].bytes_sent = 0;
+    printf("[CONNECTION] New connection: fd=%d (total active: %d)\n", new_fd, server_state->active_connections);
+
     return 0;
 }
 
@@ -82,6 +129,10 @@ int free_client(Client* client) {
     client->content_length = 0;
     client->body_bytes_received = 0;
     client->last_activity = 0;
+    client->bytes_sent = 0;
+    client->request_start.tv_sec = 0;
+    client->request_start.tv_usec = 0;
+
     return 0;
 }
 
@@ -102,7 +153,6 @@ int close_connection(int fd, ServerState* server_state, int do_shutdown) {
         perror("close");
         return -1;
     }
-    printf("Disconnected: %d\n\n", fd);
     for (int i = 0; i < server_state->active_connections; i++) {
         if (server_state->active_fds[i] == fd) {
             // Swap with last element
@@ -111,6 +161,7 @@ int close_connection(int fd, ServerState* server_state, int do_shutdown) {
         }
     }
     server_state->active_connections--;
+    printf("[CONNECTION] Closing connection: fd=%d (total active: %d)\n", fd, server_state->active_connections);
     return 0;
 }
 
@@ -128,6 +179,24 @@ int check_if_headers_complete(Client* client, int* headers_complete) {
     }
     *headers_complete = 1;
     return 0;
+}
+
+int send_error_response(Client* client, const char* error_path, const char* status_code, const char* status_message) {
+    client->response = calloc(1, sizeof(HttpResponse));
+    if (client->response == NULL) {
+        perror("malloc");
+        free_client(client);
+        return -1;
+    }
+    init_http_response(client->response);
+    get_default_response(client->response, client->request);
+    strcpy(client->response->status_code, status_code);
+    strcpy(client->response->status_message, status_message);
+
+    serve_static_file(error_path, client->response);
+
+    client->state = CLIENT_STATE_SENDING_RESPONSE;
+    return response_to_buffer(client->response, &client->response_buffer);
 }
 
 int handle_http_request(Client* client) {
@@ -153,10 +222,22 @@ int handle_http_request(Client* client) {
         if (headers_complete) {
             parse_result = parse_http_request_headers(client->buffer, client->request);
             if (parse_result != PARSE_HTTP_REQUEST_SUCCESS) {
-                printf("Bad Request - %s\n", client->buffer);
-                serve_static_file(ERROR_400_PATH, client->response);
-                return -1;
+                send_error_response(client, ERROR_400_PATH, "400", "Bad Request");
+                return 0;
             }
+            if (is_http_1_1(client->request)) {
+                char* host_str = NULL;
+                if (string_hashmap_get_case_insensitive(client->request->headers, "Host", strlen("Host"), &host_str) != HASHMAP_SUCCESS || host_str == NULL || strlen(host_str) == 0) {
+                    send_error_response(client, ERROR_400_PATH, "400", "Bad Request");
+                    return 0;
+                }
+            }
+
+            if (strcmp(client->request->method, "GET") != 0 && strcmp(client->request->method, "HEAD") != 0) {
+                send_error_response(client, ERROR_405_PATH, "405", "Method Not Allowed");
+                return 0;
+            }
+
             char* content_length_str = NULL;
             if (string_hashmap_get_case_insensitive(client->request->headers, "Content-Length", strlen("Content-Length"), &content_length_str) != HASHMAP_SUCCESS) {
                 client->content_length = 0;
@@ -174,9 +255,8 @@ int handle_http_request(Client* client) {
         if (client->bytes_received - client->headers_end_offset >= client->content_length) {
             int parse_result = parse_http_request_body(client->buffer, client->request);
             if (parse_result != PARSE_HTTP_REQUEST_SUCCESS) {
-                printf("Bad Request - %s\n", client->buffer);
-                serve_static_file(ERROR_400_PATH, client->response);
-                return -1;
+                send_error_response(client, ERROR_400_PATH, "400", "Bad Request");
+                return 0;
             }
             client->state = CLIENT_STATE_SENDING_RESPONSE;
         } else{
@@ -192,7 +272,7 @@ int handle_http_request(Client* client) {
             return -1;
         }
         init_http_response(client->response);
-        get_default_response(client->response);
+        get_default_response(client->response, client->request);
         serve_static_file(client->request->path, client->response);
 
         int result = response_to_buffer(client->response, &client->response_buffer);
@@ -203,54 +283,143 @@ int handle_http_request(Client* client) {
     return 0;
 }
 
+int should_close_connection(const HttpResponse* res) {
+    char* connection_value = NULL;
+    if (string_hashmap_get_case_insensitive(res->headers, "Connection", strlen("Connection"), &connection_value) == HASHMAP_SUCCESS && connection_value != NULL && strlen(connection_value) > 0) {
+        if (strcasecmp(connection_value, "close") == 0) {
+            return 1; // Should close
+        }
+    }
+    // Check request version for default behavior
+    if (strncmp(res->version, "HTTP/1.0", 8) == 0) {
+        return 1; // HTTP/1.0 defaults to close
+    }
+    return 0; // HTTP/1.1 defaults to keep-alive
+}
+
 int handle_client_receive(int fd, ServerState* server_state) {
     Client* client = &server_state->clients[fd];
+
     if (client->state == CLIENT_STATE_IDLE) {
+        gettimeofday(&client->request_start, NULL);
         client->state = CLIENT_STATE_RECEIVING_HEADERS;
     }
     
-    int bytes = recv(fd, 
-        client->buffer + client->bytes_received,  // Start after existing data
-        sizeof(client->buffer) - client->bytes_received - 1,  // Remaining space
-        0);
+    if (client->state == CLIENT_STATE_RECEIVING_HEADERS || client->state == CLIENT_STATE_RECEIVING_BODY) {
+        int bytes = recv(fd, 
+            client->buffer + client->bytes_received,  // Start after existing data
+            sizeof(client->buffer) - client->bytes_received - 1,  // Remaining space
+            0);
 
-    if (bytes < 0) {
-        perror("recv");
-        free_client(client);
-        close_connection(fd, server_state, 0);
-        return -1;
+        if (bytes < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 0;  // No data to receive, so just wait
+            } else {
+                perror("recv");
+                free_client(client);
+                close_connection(fd, server_state, 0);
+                return -1;
+            }
+        } else{
+            client->bytes_received += bytes;
+            client->last_activity = time(NULL);
+            
+            if (bytes == 0) {
+                // client disconnected
+                free_client(client);
+                return close_connection(fd, server_state, 0);
+            } 
+
+            if (client->bytes_received > BUF_SIZE) {
+                perror("Client sent too much data");
+                free_client(client);
+                return close_connection(fd, server_state, 0);
+            } 
+
+            client->buffer[client->bytes_received] = '\0';
+
+            handle_http_request(client);
+        }
     }
 
-    client->bytes_received += bytes;
-    client->last_activity = time(NULL);
-    
-    if (bytes == 0) {
-        // client disconnected
-        free_client(client);
-        return close_connection(fd, server_state, 0);
-    } 
-
-    if (client->bytes_received > BUF_SIZE) {
-        perror("Client sent too much data");
-        free_client(client);
-        return close_connection(fd, server_state, 0);
-    } 
-
-    client->buffer[client->bytes_received] = '\0';
-
-    handle_http_request(client);
-
     if (client->state == CLIENT_STATE_SENDING_RESPONSE) {
-        int send_result = send(fd, client->response_buffer, client->response->headers_length + client->response->body_length, 0); // send the data back to the socket
+        size_t bytes_to_send;
+        int is_head = (strcmp(client->request->method, "HEAD") == 0);
+        if (is_head) {
+            bytes_to_send = client->response->headers_length;
+        } else {
+            bytes_to_send = client->response->headers_length + client->response->body_length;
+        }
+
+        size_t remaining_to_send = bytes_to_send - client->bytes_sent;
+        
+        int send_result = send(fd, client->response_buffer + client->bytes_sent, remaining_to_send, 0); // send the data back to the socket
+        
         if (send_result < 0) {
-            perror("send");
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer is full, so register for EPOLLOUT to be notified when writable
+                struct epoll_event ev;
+                ev.events = EPOLLIN | EPOLLOUT;  // Keep listening for reads AND writes
+                ev.data.fd = fd;
+                if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                    perror("epoll_ctl: mod EPOLLOUT");
+                    free_client(client);
+                    close_connection(fd, server_state, 0);
+                    return -1;
+                }
+                // we'll continue sending when EPOLLOUT fires
+                return 0;
+            } else {
+                // Real error, so close connection
+                perror("send");
+                free_client(client);
+                close_connection(fd, server_state, 0);
+                return -1;
+            }
+        }
+        client->bytes_sent += send_result;
+
+        if (client->bytes_sent >= bytes_to_send) {
+            // We've sent all the data, so we can close the connection or go back to idle
+            struct timeval end;
+            gettimeofday(&end, NULL);
+            double time_ms = (end.tv_sec - client->request_start.tv_sec) * 1000.0 + (end.tv_usec - client->request_start.tv_usec) / 1000.0;
+            log_request(client->request, client->response, time_ms);
+
+            // Remove EPOLLOUT if we registered it (only listen for reads now)
+            struct epoll_event ev;
+            ev.events = EPOLLIN;  // Back to just reading
+            ev.data.fd = fd;
+            if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                perror("epoll_ctl: mod EPOLLIN");
+                free_client(client);
+                close_connection(fd, server_state, 0);
+                return -1;
+            }
+
+            if (should_close_connection(client->response)) {
+                free_client(client);
+                close_connection(fd, server_state, 1);
+                return 0;
+            } else {
+                free_client(client);
+                client->state = CLIENT_STATE_IDLE;
+                client->last_activity = time(NULL);
+                return 0;
+            }
+        }
+
+        // Partial send - we'll continue when EPOLLOUT fires
+        // But first, make sure we're registered for EPOLLOUT
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLOUT;
+        ev.data.fd = fd;
+        if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+            perror("epoll_ctl: mod EPOLLOUT");
             free_client(client);
             close_connection(fd, server_state, 0);
             return -1;
         }
-        printf("Send:\n%s\nTo: %d\n\n", client->response_buffer, fd);
-        free_client(client);
-        close_connection(fd, server_state, 1);
     }
 
     return 0;
@@ -261,7 +430,7 @@ int handle_timed_out_clients(ServerState* server_state) {
     for (int i = server_state->active_connections - 1; i >= 0; i--) { // we iterate backwards because we are removing elements from the array in close_connection
         int fd = server_state->active_fds[i];
         if (server_state->clients[fd].last_activity != 0 && (now - server_state->clients[fd].last_activity > 30)) {  // 30 sec timeout
-            printf("Timeout: closing fd=%d\n", fd);
+            printf("[CONNECTION] Timeout: closing fd=%d (total active: %d)\n", fd, server_state->active_connections);
             free_client(&server_state->clients[fd]);
             close_connection(fd, server_state, 1);
         }

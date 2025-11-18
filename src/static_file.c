@@ -91,8 +91,13 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
 int set_error_response(HttpResponse* response, const char* status_code, const char* status_message, const char* file_path) {
     strcpy(response->status_code, status_code);
     strcpy(response->status_message, status_message);
+
+    // Build full path - always prepend PUBLIC_DIR for error files
+    char full_path[PATH_MAX];
+    snprintf(full_path, PATH_MAX, "%s%s", PUBLIC_DIR, file_path);
+
     struct stat st;
-    if (stat(file_path, &st) != 0) {
+    if (stat(full_path, &st) != 0) {
         response->body = strdup("<html><body><h1>Error</h1></body></html>"); // Dynamically allocate the body
         response->body_length = strlen(response->body);
         if (response->body == NULL) {
@@ -102,7 +107,7 @@ int set_error_response(HttpResponse* response, const char* status_code, const ch
         set_content_length(response, strlen(response->body));
         return 0;
     }
-    set_data_in_response(response, file_path, &st);
+    set_data_in_response(response, full_path, &st);
     return 0;
 }
 
@@ -110,6 +115,7 @@ int serve_static_file(const char* path, HttpResponse* response) {
 
     char file_path[PATH_MAX]; // create a buffer to store the file path
     int result;
+
     if (path[strlen(path) - 1] == '/' || strcmp(path, "/") == 0) {
         // Directory request - serve index.html
         result = snprintf(file_path, PATH_MAX, "%s%sindex.html", PUBLIC_DIR, path);
@@ -134,7 +140,7 @@ int serve_static_file(const char* path, HttpResponse* response) {
         set_error_response(response, "500", "Internal Server Error", ERROR_500_PATH);
         return 0;
     }
-    
+
     if (strncmp(resolved, public_real, strlen(public_real)) != 0) {
         // Path traversal attempt - requested file is outside public/
         set_error_response(response, "403", "Forbidden", ERROR_403_PATH);
@@ -146,9 +152,6 @@ int serve_static_file(const char* path, HttpResponse* response) {
         set_error_response(response, "404", "Not Found", ERROR_404_PATH);
         return 0;
     }
-
-    strcpy(response->status_code, "200");
-    strcpy(response->status_message, "OK");
 
     int set_data_in_response_result = set_data_in_response(response, resolved, &st);
     if (set_data_in_response_result != 0) {
