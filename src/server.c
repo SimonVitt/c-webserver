@@ -54,12 +54,7 @@ int handle_new_connection(ServerState* server_state) {
     struct sockaddr_storage client_addr; // ip... address of the client
     socklen_t addr_size = sizeof client_addr; // size of the ip... address of the client
     int new_fd = accept(server_state->server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there    
-    
-    int send_buf_size = 1024;  // 1KB - very small!
-    if (setsockopt(new_fd, SOL_SOCKET, SO_SNDBUF, &send_buf_size, sizeof(send_buf_size)) < 0) {
-        perror("setsockopt SO_SNDBUF");
-    }
-    
+        
     if (new_fd < 0) {
         perror("accept");
         return -1;
