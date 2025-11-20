@@ -98,6 +98,7 @@ int handle_new_connection(ServerState* server_state) {
     server_state->clients[new_fd].response = NULL;
     server_state->clients[new_fd].response_buffer = NULL;
     server_state->clients[new_fd].bytes_sent = 0;
+    server_state->clients[new_fd].continue_bytes_sent = 0;
     printf("[CONNECTION] New connection: fd=%d (total active: %d)\n", new_fd, server_state->active_connections);
 
     return 0;
@@ -127,7 +128,7 @@ int free_client(Client* client) {
     client->bytes_sent = 0;
     client->request_start.tv_sec = 0;
     client->request_start.tv_usec = 0;
-
+    client->continue_bytes_sent = 0;
     return 0;
 }
 
@@ -163,12 +164,18 @@ int close_connection(int fd, ServerState* server_state, int do_shutdown) {
 int check_if_headers_complete(Client* client, int* headers_complete) {
     char* headers_end = strstr(client->buffer, "\r\n\r\n");
     if (headers_end == NULL) {
-        char* headers_end = strstr(client->buffer, "\n\n");
-        if (headers_end == NULL) {
+        // Only allow \n\n for HTTP/1.0
+        if (client->request != NULL && is_http_1_0(client->request)) {
+            char* headers_end_n = strstr(client->buffer, "\n\n");
+            if (headers_end_n == NULL) {
+                *headers_complete = 0;
+                return 0;
+            }
+            client->headers_end_offset = headers_end_n - client->buffer + 2;
+        } else {
             *headers_complete = 0;
             return 0;
         }
-        client->headers_end_offset = headers_end - client->buffer + 2;
     } else {
         client->headers_end_offset = headers_end - client->buffer + 4;
     }
@@ -188,10 +195,59 @@ int send_error_response(Client* client, const char* error_path, const char* stat
     strcpy(client->response->status_code, status_code);
     strcpy(client->response->status_message, status_message);
 
-    serve_static_file(error_path, client->response);
+    serve_static_file(error_path, client->response, client->request);
 
     client->state = CLIENT_STATE_SENDING_RESPONSE;
     return response_to_buffer(client->response, &client->response_buffer);
+}
+
+int send_100_continue(int fd, Client* client, ServerState* server_state) {
+    const char* response = "HTTP/1.1 100 Continue\r\n\r\n";
+    size_t response_len = strlen(response);
+    
+    size_t offset = client->continue_bytes_sent;
+    size_t remaining = response_len - offset;
+    
+    int send_result = send(fd, response + offset, remaining, 0);
+    
+    if (send_result < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Need to wait for socket to be writable
+            client->state = CLIENT_STATE_SENDING_100_CONTINUE;
+            // Register EPOLLOUT - only call epoll_ctl once here
+            struct epoll_event ev;
+            ev.events = EPOLLIN | EPOLLOUT;
+            ev.data.fd = fd;
+            if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                perror("epoll_ctl: mod EPOLLOUT for 100 Continue");
+                return -1;
+            }
+            return 0; // Partial, will continue
+        } else {
+            perror("send 100 Continue");
+            return -1;
+        }
+    }
+    
+    client->continue_bytes_sent += send_result;
+    
+    if (client->continue_bytes_sent >= response_len) {
+        // Fully sent - transition to RECEIVING_BODY
+        client->continue_bytes_sent = 0;
+        printf("[100 CONTINUE] Fully sent to client fd=%d\n", fd);
+        return 1; // Success
+    } else {
+        // Partial send, so register EPOLLOUT (only if not already registered)
+        client->state = CLIENT_STATE_SENDING_100_CONTINUE;
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLOUT;
+        ev.data.fd = fd;
+        if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+            perror("epoll_ctl: mod EPOLLOUT for 100 Continue");
+            return -1;
+        }
+        return 0; // Partial, will continue
+    }
 }
 
 int handle_http_request(Client* client) {
@@ -239,6 +295,18 @@ int handle_http_request(Client* client) {
             } else {
                 client->content_length = atol(content_length_str);
             }
+
+
+            if (is_http_1_1(client->request)) {
+                char* expect_value = NULL;
+                if (string_hashmap_get_case_insensitive(client->request->headers, "Expect", strlen("Expect"), &expect_value) == HASHMAP_SUCCESS) {
+                    if (expect_value != NULL && strcasecmp(expect_value, "100-continue") == 0) {
+                        client->state = CLIENT_STATE_SENDING_100_CONTINUE;
+                        return 0;
+                    }
+                }
+            }
+
             client->state = CLIENT_STATE_RECEIVING_BODY;
 
         } else{
@@ -268,7 +336,7 @@ int handle_http_request(Client* client) {
         }
         init_http_response(client->response);
         get_default_response(client->response, client->request);
-        serve_static_file(client->request->path, client->response);
+        serve_static_file(client->request->path, client->response, client->request);
 
         int result = response_to_buffer(client->response, &client->response_buffer);
         
@@ -335,6 +403,32 @@ int handle_client_receive(int fd, ServerState* server_state) {
 
             handle_http_request(client);
         }
+    }
+
+    if (client->state == CLIENT_STATE_SENDING_100_CONTINUE) {
+        int result = send_100_continue(fd, client, server_state);
+        if (result < 0) {
+            free_client(client);
+            close_connection(fd, server_state, 0);
+            return -1;
+        }
+        if (result == 0) {
+            return 0; // Still partial
+        }
+        // Fully sent - transition to RECEIVING_BODY
+        client->state = CLIENT_STATE_RECEIVING_BODY;
+        
+        // Remove EPOLLOUT, back to just reading
+        struct epoll_event ev;
+        ev.events = EPOLLIN;
+        ev.data.fd = fd;
+        if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+            perror("epoll_ctl: mod EPOLLIN for 100 Continue");
+            free_client(client);
+            close_connection(fd, server_state, 0);
+            return -1;
+        }
+        handle_http_request(client);
     }
 
     if (client->state == CLIENT_STATE_SENDING_RESPONSE) {

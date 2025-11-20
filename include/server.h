@@ -10,9 +10,10 @@
 typedef enum {
     CLIENT_STATE_IDLE = 0,
     CLIENT_STATE_RECEIVING_HEADERS = 1,
-    CLIENT_STATE_RECEIVING_BODY = 2,
-    CLIENT_STATE_SENDING_RESPONSE = 3,
-    CLIENT_STATE_NO_CONNECTION = 4
+    CLIENT_STATE_SENDING_100_CONTINUE = 2,
+    CLIENT_STATE_RECEIVING_BODY = 3,
+    CLIENT_STATE_SENDING_RESPONSE = 4,
+    CLIENT_STATE_NO_CONNECTION = 5
 } ClientState;
 
 typedef struct {
@@ -34,6 +35,8 @@ typedef struct {
     struct timeval request_start;
 
     size_t bytes_sent;
+
+    size_t continue_bytes_sent; // How much of 100 Continue we've sent
 } Client;
 
 int server_run(void);

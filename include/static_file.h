@@ -7,6 +7,6 @@
 #define ERROR_500_PATH "/errors/500.html"
 #define ERROR_403_PATH "/errors/403.html"
 
-int serve_static_file(const char* path, HttpResponse* response);
+int serve_static_file(const char* path, HttpResponse* response, HttpRequest* request);
 
 #endif

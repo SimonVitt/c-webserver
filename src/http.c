@@ -57,6 +57,20 @@ int is_http_1_0(const HttpRequest* req) {
     return strncasecmp(req->version, "HTTP/1.0", 8) == 0; // Case-insensitive comparison
 }
 
+// RFC 9112: Check for bare CR characters (CR not followed by LF)
+// Returns 1 if bare CR found, 0 otherwise
+static int has_bare_cr(const char* buffer, size_t buffer_len) {
+    for (size_t i = 0; i < buffer_len; i++) {
+        if (buffer[i] == '\r') {
+            // Check if next character is \n
+            if (i + 1 >= buffer_len || buffer[i + 1] != '\n') {
+                return 1; // Bare CR found
+            }
+        }
+    }
+    return 0; // No bare CR
+}
+
 enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRequest* req) {
 
     char* buffer_copy = malloc(sizeof(char) * (strlen(buffer) + 1));
@@ -83,6 +97,10 @@ enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRe
     req->version[sizeof(req->version) - 1] = '\0'; // Just safety if method overflowed and the last byte is not null
 
     // Normalize version
+    for (char *p = req->method; *p; ++p)
+        *p = (char)toupper((unsigned char)*p);
+
+    // normalize method
     for (char *p = req->method; *p; ++p)
         *p = (char)toupper((unsigned char)*p);
 
@@ -150,6 +168,12 @@ int parse_http_request_headers(const char* buffer, HttpRequest* req) {
         return -1;
     }
 
+    // RFC 9112: Reject bare CR characters (MUST requirement)
+    size_t buffer_len = strlen(buffer);
+    if (has_bare_cr(buffer, buffer_len)) {
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
+
     enum parse_http_request_error parse_http_request_line_result = parse_http_request_line(buffer, req);
     if (parse_http_request_line_result != PARSE_HTTP_REQUEST_SUCCESS) {
         return parse_http_request_line_result;
@@ -206,10 +230,6 @@ int get_default_response(HttpResponse* res, HttpRequest* req) {
     char server_key[] = "Server";
     char server_value[] = "C-WebServer/1.0";
     string_hashmap_put(res->headers, server_key, server_value, strlen(server_key), strlen(server_value));
-
-    char last_modified_key[] = "Last-Modified";
-    char last_modified_value[] = "Thu, 30 Oct 2025 12:00:00 GMT";
-    string_hashmap_put(res->headers, last_modified_key, last_modified_value, strlen(last_modified_key), strlen(last_modified_value));
 
     char date_key[] = "Date";
     char date_value[64];
