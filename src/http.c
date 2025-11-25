@@ -254,6 +254,36 @@ int get_default_response(HttpResponse* res, HttpRequest* req) {
     return 0;
 }
 
+int add_security_headers(HttpResponse* res, int is_https) {
+    // X-Content-Type-Options: nosniff
+    char x_content_type_key[] = "X-Content-Type-Options";
+    char x_content_type_value[] = "nosniff";
+    string_hashmap_put(res->headers, x_content_type_key, x_content_type_value, 
+                       strlen(x_content_type_key), strlen(x_content_type_value));
+
+    // X-Frame-Options: DENY
+    char x_frame_key[] = "X-Frame-Options";
+    char x_frame_value[] = "DENY";
+    string_hashmap_put(res->headers, x_frame_key, x_frame_value, 
+                       strlen(x_frame_key), strlen(x_frame_value));
+
+    // X-XSS-Protection: 1; mode=block
+    char x_xss_key[] = "X-XSS-Protection";
+    char x_xss_value[] = "1; mode=block";
+    string_hashmap_put(res->headers, x_xss_key, x_xss_value, 
+                       strlen(x_xss_key), strlen(x_xss_value));
+
+    // Strict-Transport-Security (only for HTTPS)
+    if (is_https) {
+        char hsts_key[] = "Strict-Transport-Security";
+        char hsts_value[] = "max-age=31536000; includeSubDomains";
+        string_hashmap_put(res->headers, hsts_key, hsts_value, 
+                           strlen(hsts_key), strlen(hsts_value));
+    }
+
+    return 0;
+}
+
 int free_http_response(HttpResponse* res) {
     string_hashmap_free(res->headers);
     free(res->body);

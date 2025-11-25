@@ -37,6 +37,7 @@ int free_http_request(HttpRequest* req);
 // Response functions
 int init_http_response(HttpResponse* res);
 int get_default_response(HttpResponse* res, HttpRequest* req);
+int add_security_headers(HttpResponse* res, int is_https);
 int free_http_response(HttpResponse* res);
 int response_to_buffer(HttpResponse* res, char** buffer);
 

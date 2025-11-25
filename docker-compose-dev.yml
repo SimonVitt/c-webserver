@@ -7,8 +7,9 @@ services:
       dockerfile: Dockerfile.dev
     ports:
       - "8080:8080"
+      - "8443:8443"
     volumes:
       - .:/app
-    command: sh -c "make clean && make all && ./webserver"
+    command: sh -c "make clean && make all && ./webserver --http-port 8080 --https-port 8443 --cert ssl_files/localhost.pem --key ssl_files/localhost-key.pem"
     stdin_open: true
     tty: true

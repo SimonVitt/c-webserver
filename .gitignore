@@ -1,3 +1,4 @@
 .webserver
 .test_http
 .test_static_file
+**/*.pem

@@ -11,21 +11,24 @@
 #include <stdlib.h>
 #include <fcntl.h>   // For fcntl() and O_NONBLOCK
 #include <errno.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include "./../include/http.h"
 #include "./../include/static_file.h"
 #include "./../include/server.h"
 
 #define MAX_EVENTS 128
 #define MAX_CLIENTS 20000 // the maximum number of clients that can be connected to the server
-#define PORT "8080"  // the port users will be connecting to
 #define BACKLOG 512 // how many pending connections queue will hold
 
 typedef struct {
     Client* clients; // We use an array of clients to store the clients that are connected to the server. the client will always be at the index of the file descriptor of the socket. We dont use a hashmap because this would cause of memory overhead (more often mallocing and freeing memory).
     int epfd; // epoll file descriptor
-    int server_socket;
+    int http_socket;
+    int https_socket;
     int active_connections;
     int* active_fds;
+    SSL_CTX* ssl_ctx; //SSL context (NULL if not using HTTPS)
 } ServerState;
 
 void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
@@ -50,10 +53,12 @@ void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
            time_ms);
 }
 
-int handle_new_connection(ServerState* server_state) {
+int handle_new_connection(ServerState* server_state, int is_https) {
+    int listening_socket = is_https ? server_state->https_socket : server_state->http_socket;
+
     struct sockaddr_storage client_addr; // ip... address of the client
     socklen_t addr_size = sizeof client_addr; // size of the ip... address of the client
-    int new_fd = accept(server_state->server_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there    
+    int new_fd = accept(listening_socket, (struct sockaddr *)&client_addr, &addr_size); // we get the addrinfo of someone who wrote/(wants to write?) to this socket. Now we can read and write from there    
         
     if (new_fd < 0) {
         perror("accept");
@@ -88,9 +93,37 @@ int handle_new_connection(ServerState* server_state) {
     server_state->active_fds[server_state->active_connections] = new_fd;
     server_state->active_connections++;
 
+    // Initialize SSL for this connection if SSL is enabled
+    server_state->clients[new_fd].ssl = NULL;
+    if (is_https && server_state->ssl_ctx != NULL) {
+        // Create a new SSL session object for this client connection.
+        // Uses the global SSL_CTX configuration (cert, key, protocols, ciphers).
+        SSL* ssl = SSL_new(server_state->ssl_ctx);
+        if (ssl == NULL) {
+            ERR_print_errors_fp(stderr);
+            close(new_fd);
+            server_state->active_connections--;
+            return -1;
+        }
+        
+        // Attach the accepted TCP socket (new_fd) to the SSL object.
+        // This tells OpenSSL to read/write encrypted data over this socket.
+        if (SSL_set_fd(ssl, new_fd) != 1) {
+            ERR_print_errors_fp(stderr);
+            SSL_free(ssl);
+            close(new_fd);
+            server_state->active_connections--;
+            return -1;
+        }
+        
+        server_state->clients[new_fd].ssl = ssl;
+        server_state->clients[new_fd].state = CLIENT_STATE_SSL_HANDSHAKE;  // Start handshake
+    } else {
+        server_state->clients[new_fd].state = CLIENT_STATE_IDLE;
+    }
+
     server_state->clients[new_fd].bytes_received = 0;
     server_state->clients[new_fd].last_activity = time(NULL);
-    server_state->clients[new_fd].state = CLIENT_STATE_IDLE;
     server_state->clients[new_fd].request = NULL;
     server_state->clients[new_fd].headers_end_offset = 0;
     server_state->clients[new_fd].content_length = 0;
@@ -99,12 +132,18 @@ int handle_new_connection(ServerState* server_state) {
     server_state->clients[new_fd].response_buffer = NULL;
     server_state->clients[new_fd].bytes_sent = 0;
     server_state->clients[new_fd].continue_bytes_sent = 0;
-    printf("[CONNECTION] New connection: fd=%d (total active: %d)\n", new_fd, server_state->active_connections);
+    const char* protocol = is_https ? "HTTPS" : "HTTP";
+    printf("[CONNECTION] New %s connection: fd=%d (total active: %d)\n", protocol, new_fd, server_state->active_connections);
 
     return 0;
 }
 
-int free_client(Client* client) {
+int free_client(Client* client, int keep_ssl) {
+    if (!keep_ssl && client->ssl != NULL) {
+        SSL_shutdown(client->ssl);
+        SSL_free(client->ssl);
+        client->ssl = NULL;
+    }
     if (client->request != NULL) {
         free_http_request(client->request);
         client->request = NULL;
@@ -187,11 +226,12 @@ int send_error_response(Client* client, const char* error_path, const char* stat
     client->response = calloc(1, sizeof(HttpResponse));
     if (client->response == NULL) {
         perror("malloc");
-        free_client(client);
+        free_client(client, 0);
         return -1;
     }
     init_http_response(client->response);
     get_default_response(client->response, client->request);
+    add_security_headers(client->response, client->ssl != NULL);
     strcpy(client->response->status_code, status_code);
     strcpy(client->response->status_message, status_message);
 
@@ -208,24 +248,47 @@ int send_100_continue(int fd, Client* client, ServerState* server_state) {
     size_t offset = client->continue_bytes_sent;
     size_t remaining = response_len - offset;
     
-    int send_result = send(fd, response + offset, remaining, 0);
+    int send_result;
+    if (client->ssl != NULL) {
+        send_result = SSL_write(client->ssl, response + offset, remaining);
+    } else {
+        send_result = send(fd, response + offset, remaining, 0);
+    }
     
     if (send_result < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // Need to wait for socket to be writable
-            client->state = CLIENT_STATE_SENDING_100_CONTINUE;
-            // Register EPOLLOUT - only call epoll_ctl once here
-            struct epoll_event ev;
-            ev.events = EPOLLIN | EPOLLOUT;
-            ev.data.fd = fd;
-            if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
-                perror("epoll_ctl: mod EPOLLOUT for 100 Continue");
+        if (client->ssl != NULL) {
+            // SSL error handling
+            int ssl_error = SSL_get_error(client->ssl, send_result);
+            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                client->state = CLIENT_STATE_SENDING_100_CONTINUE;
+                struct epoll_event ev;
+                ev.events = EPOLLIN | EPOLLOUT;
+                ev.data.fd = fd;
+                if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                    perror("epoll_ctl: mod EPOLLOUT for 100 Continue");
+                    return -1;
+                }
+                return 0;
+            } else {
+                ERR_print_errors_fp(stderr);
                 return -1;
             }
-            return 0; // Partial, will continue
         } else {
-            perror("send 100 Continue");
-            return -1;
+            // Plain socket error handling
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                client->state = CLIENT_STATE_SENDING_100_CONTINUE;
+                struct epoll_event ev;
+                ev.events = EPOLLIN | EPOLLOUT;
+                ev.data.fd = fd;
+                if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                    perror("epoll_ctl: mod EPOLLOUT for 100 Continue");
+                    return -1;
+                }
+                return 0;
+            } else {
+                perror("send 100 Continue");
+                return -1;
+            }
         }
     }
     
@@ -331,11 +394,12 @@ int handle_http_request(Client* client) {
         client->response = calloc(1, sizeof(HttpResponse));
         if (client->response == NULL) {
             perror("malloc");
-            free_client(client);
+            free_client(client, 0);
             return -1;
         }
         init_http_response(client->response);
         get_default_response(client->response, client->request);
+        add_security_headers(client->response, client->ssl != NULL);
         serve_static_file(client->request->path, client->response, client->request);
 
         int result = response_to_buffer(client->response, &client->response_buffer);
@@ -363,25 +427,82 @@ int should_close_connection(const HttpResponse* res) {
 int handle_client_receive(int fd, ServerState* server_state) {
     Client* client = &server_state->clients[fd];
 
+    if (client->state == CLIENT_STATE_SSL_HANDSHAKE) {
+        int ssl_result = SSL_accept(client->ssl);
+        if (ssl_result <= 0) {
+            int ssl_error = SSL_get_error(client->ssl, ssl_result);
+            if (ssl_error == SSL_ERROR_WANT_READ) {
+                // Need more data for handshake, wait for EPOLLIN
+                return 0;
+            } else if (ssl_error == SSL_ERROR_WANT_WRITE) {
+                // Need to write for handshake, register for EPOLLOUT
+                struct epoll_event ev;
+                ev.events = EPOLLIN | EPOLLOUT;
+                ev.data.fd = fd;
+                epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev);
+                return 0;
+            } else {
+                // Handshake failed
+                ERR_print_errors_fp(stderr);
+                free_client(client, 0);
+                close_connection(fd, server_state, 0);
+                return -1;
+            }
+        }
+        // Handshake complete, proceed to normal HTTP handling
+        client->state = CLIENT_STATE_IDLE;
+        printf("[SSL] Handshake complete for fd=%d\n", fd);
+    }
+
     if (client->state == CLIENT_STATE_IDLE) {
         gettimeofday(&client->request_start, NULL);
         client->state = CLIENT_STATE_RECEIVING_HEADERS;
     }
     
     if (client->state == CLIENT_STATE_RECEIVING_HEADERS || client->state == CLIENT_STATE_RECEIVING_BODY) {
-        int bytes = recv(fd, 
-            client->buffer + client->bytes_received,  // Start after existing data
-            sizeof(client->buffer) - client->bytes_received - 1,  // Remaining space
-            0);
+        int bytes; 
+
+        // Use SSL_read if SSL is enabled, otherwise use recv
+        if (client->ssl != NULL) {
+            bytes = SSL_read(client->ssl, 
+                client->buffer + client->bytes_received,
+                sizeof(client->buffer) - client->bytes_received - 1);
+        } else {
+            bytes = recv(fd, 
+                client->buffer + client->bytes_received, // Start after existing data
+                sizeof(client->buffer) - client->bytes_received - 1, // Remaining space
+                0);
+        }
 
         if (bytes < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return 0;  // No data to receive, so just wait
+            if (client->ssl != NULL) {
+                // NEW: Handle SSL errors
+                int ssl_error = SSL_get_error(client->ssl, bytes);
+                if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                    // SSL needs more data or can't write yet
+                    if (ssl_error == SSL_ERROR_WANT_WRITE) {
+                        struct epoll_event ev;
+                        ev.events = EPOLLIN | EPOLLOUT;
+                        ev.data.fd = fd;
+                        epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev);
+                    }
+                    return 0;
+                } else {
+                    // Real SSL error
+                    ERR_print_errors_fp(stderr);
+                    free_client(client, 0);
+                    close_connection(fd, server_state, 0);
+                    return -1;
+                }
             } else {
-                perror("recv");
-                free_client(client);
-                close_connection(fd, server_state, 0);
-                return -1;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    return 0;  // No data to receive, so just wait
+                } else {
+                    perror("recv");
+                    free_client(client, 0);
+                    close_connection(fd, server_state, 0);
+                    return -1;
+                }
             }
         } else{
             client->bytes_received += bytes;
@@ -389,13 +510,13 @@ int handle_client_receive(int fd, ServerState* server_state) {
             
             if (bytes == 0) {
                 // client disconnected
-                free_client(client);
+                free_client(client, 0);
                 return close_connection(fd, server_state, 0);
             } 
 
             if (client->bytes_received > BUF_SIZE) {
                 perror("Client sent too much data");
-                free_client(client);
+                free_client(client, 0);
                 return close_connection(fd, server_state, 0);
             } 
 
@@ -408,7 +529,7 @@ int handle_client_receive(int fd, ServerState* server_state) {
     if (client->state == CLIENT_STATE_SENDING_100_CONTINUE) {
         int result = send_100_continue(fd, client, server_state);
         if (result < 0) {
-            free_client(client);
+            free_client(client, 0);
             close_connection(fd, server_state, 0);
             return -1;
         }
@@ -424,7 +545,7 @@ int handle_client_receive(int fd, ServerState* server_state) {
         ev.data.fd = fd;
         if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
             perror("epoll_ctl: mod EPOLLIN for 100 Continue");
-            free_client(client);
+            free_client(client, 0);
             close_connection(fd, server_state, 0);
             return -1;
         }
@@ -442,28 +563,53 @@ int handle_client_receive(int fd, ServerState* server_state) {
 
         size_t remaining_to_send = bytes_to_send - client->bytes_sent;
         
-        int send_result = send(fd, client->response_buffer + client->bytes_sent, remaining_to_send, 0); // send the data back to the socket
+        int send_result;
+        if (client->ssl != NULL) {
+            send_result = SSL_write(client->ssl, client->response_buffer + client->bytes_sent, remaining_to_send);
+        } else {
+            send_result = send(fd, client->response_buffer + client->bytes_sent, remaining_to_send, 0);
+        }
         
         if (send_result < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Socket buffer is full, so register for EPOLLOUT to be notified when writable
-                struct epoll_event ev;
-                ev.events = EPOLLIN | EPOLLOUT;  // Keep listening for reads AND writes
-                ev.data.fd = fd;
-                if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
-                    perror("epoll_ctl: mod EPOLLOUT");
-                    free_client(client);
+            if (client->ssl != NULL) {
+                // SSL error handling
+                int ssl_error = SSL_get_error(client->ssl, send_result);
+                if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                    struct epoll_event ev;
+                    ev.events = EPOLLIN | EPOLLOUT;
+                    ev.data.fd = fd;
+                    if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                        perror("epoll_ctl: mod EPOLLOUT");
+                        free_client(client, 0);
+                        close_connection(fd, server_state, 0);
+                        return -1;
+                    }
+                    return 0;
+                } else {
+                    ERR_print_errors_fp(stderr);
+                    free_client(client, 0);
                     close_connection(fd, server_state, 0);
                     return -1;
                 }
-                // we'll continue sending when EPOLLOUT fires
-                return 0;
             } else {
-                // Real error, so close connection
-                perror("send");
-                free_client(client);
-                close_connection(fd, server_state, 0);
-                return -1;
+                // Plain socket error handling
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    struct epoll_event ev;
+                    ev.events = EPOLLIN | EPOLLOUT;
+                    ev.data.fd = fd;
+                    if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+                        perror("epoll_ctl: mod EPOLLOUT");
+                        free_client(client, 0);
+                        close_connection(fd, server_state, 0);
+                        return -1;
+                    }
+                    return 0;
+                } else {
+                    perror("send");
+                    free_client(client, 0);
+                    close_connection(fd, server_state, 0);
+                    return -1;
+                }
             }
         }
         client->bytes_sent += send_result;
@@ -481,17 +627,17 @@ int handle_client_receive(int fd, ServerState* server_state) {
             ev.data.fd = fd;
             if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
                 perror("epoll_ctl: mod EPOLLIN");
-                free_client(client);
+                free_client(client, 0);
                 close_connection(fd, server_state, 0);
                 return -1;
             }
 
             if (should_close_connection(client->response)) {
-                free_client(client);
+                free_client(client, 0);
                 close_connection(fd, server_state, 1);
                 return 0;
             } else {
-                free_client(client);
+                free_client(client, 1);
                 client->state = CLIENT_STATE_IDLE;
                 client->last_activity = time(NULL);
                 return 0;
@@ -505,7 +651,7 @@ int handle_client_receive(int fd, ServerState* server_state) {
         ev.data.fd = fd;
         if (epoll_ctl(server_state->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
             perror("epoll_ctl: mod EPOLLOUT");
-            free_client(client);
+            free_client(client, 0);
             close_connection(fd, server_state, 0);
             return -1;
         }
@@ -520,14 +666,94 @@ int handle_timed_out_clients(ServerState* server_state) {
         int fd = server_state->active_fds[i];
         if (server_state->clients[fd].last_activity != 0 && (now - server_state->clients[fd].last_activity > 30)) {  // 30 sec timeout
             printf("[CONNECTION] Timeout: closing fd=%d (total active: %d)\n", fd, server_state->active_connections);
-            free_client(&server_state->clients[fd]);
+            free_client(&server_state->clients[fd], 0);
             close_connection(fd, server_state, 1);
         }
     }
     return 0;
 }
 
-int server_run(void) {
+
+SSL_CTX* init_ssl_context(const char* cert_file, const char* key_file) {
+    // Initialize OpenSSL
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    
+    // Create SSL context
+    const SSL_METHOD* method = TLS_server_method();  // Use TLS 1.2/1.3
+    SSL_CTX* ctx = SSL_CTX_new(method);
+    if (ctx == NULL) {
+        ERR_print_errors_fp(stderr);
+        return NULL;
+    }
+    
+    // Load certificate file
+    if (SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    
+    // Load private key file
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    
+    // Verify private key matches certificate
+    if (!SSL_CTX_check_private_key(ctx)) {
+        fprintf(stderr, "Private key does not match certificate\n");
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    
+    return ctx;
+}
+
+static int create_listening_socket(const char* port) {
+    struct addrinfo hints, *res; // hints is where we put our own data and say how we want a connection. Res is a pointer to a linked list with possible addresses
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; // use IPv4 or IPv6
+    hints.ai_socktype = SOCK_STREAM; // use TCP
+    hints.ai_flags = AI_PASSIVE; // fill in my IP for me
+
+    int getaddrinfo_result = getaddrinfo(NULL, port, &hints, &res);
+    if (getaddrinfo_result != 0) {
+        fprintf(stderr, "getaddrinfo for port %s: %s\n", port, gai_strerror(getaddrinfo_result));
+        return -1;
+    }
+
+    int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sock < 0) {
+        perror("socket");
+        freeaddrinfo(res);
+        return -1;
+    }
+
+    int yes = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)); // allows the socket to be reused immediately after closing. SO_REUSEADDR is a socket option that allows the socket to be reused immediately after closing. yes sets this option to 1.
+
+    if (bind(sock, res->ai_addr, res->ai_addrlen) < 0) { // bind the socket, which by itself just reads or write things, to a port/address where it should write to or read from
+        perror("bind");
+        freeaddrinfo(res);
+        close(sock);
+        return -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (listen(sock, BACKLOG) < 0) {
+        perror("listen");
+        close(sock);
+        return -1;
+    }
+
+    return sock;
+}
+
+int server_run(const char* http_port, const char* https_port, const char* cert_file, const char* key_file) {
     ServerState server_state;
     server_state.active_connections = 0;
     server_state.active_fds = malloc(MAX_CLIENTS * sizeof(int));
@@ -541,47 +767,41 @@ int server_run(void) {
         return -1;
     }
 
-    struct addrinfo hints, *res; // hints is where we put our own data and say how we want a connection. Res is a pointer to a linked list with possible addresses
-    int server_socket; // sockets, server_socket for server, new_fd for client
 
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6
-    hints.ai_socktype = SOCK_STREAM; // use TCP
-    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+    // Initialize SSL/TLS context
+    server_state.ssl_ctx = NULL;  // Default: no HTTPS
 
-    int getaddrinfo_result = getaddrinfo(NULL, PORT, &hints, &res);
-    if (getaddrinfo_result != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(getaddrinfo_result));
+    server_state.https_socket = -1;
+
+    // Try to initialize SSL/TLS
+    if (https_port != NULL && cert_file != NULL && key_file != NULL) {
+        server_state.ssl_ctx = init_ssl_context(cert_file, key_file);
+        if (server_state.ssl_ctx == NULL) {
+            fprintf(stderr, "Warning: Failed to initialize SSL, HTTPS disabled\n");
+        } else {
+            printf("[SSL] HTTPS enabled with certificate: %s\n", cert_file);
+        }
+    }
+    
+
+    const char* http_port_str = http_port ? http_port : "8080";
+    server_state.http_socket = create_listening_socket(http_port_str);
+    if (server_state.http_socket < 0) {
+        fprintf(stderr, "Failed to create HTTP listening socket on port %s\n", http_port_str);
         return -1;
     }
+    printf("[HTTP] Listening on port %s\n", http_port_str);
 
-
-    server_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol); // ai means address information, res->ai_socktype and res->ai_protocol and say if tcp or udp
-    if (server_socket < 0) {
-        perror("socket");
-        freeaddrinfo(res);
-        return -1;
+    if (server_state.ssl_ctx != NULL && https_port != NULL) {
+        server_state.https_socket = create_listening_socket(https_port);
+        if (server_state.https_socket < 0) {
+            fprintf(stderr, "Warning: Failed to create HTTPS socket on port %s, continuing with HTTP only\n", https_port);
+            server_state.https_socket = -1;
+        } else {
+            printf("[HTTPS] Listening on port %s\n", https_port);
+        }
     }
-    server_state.server_socket = server_socket;
-
-    int yes = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)); // allows the socket to be reused immediately after closing. SO_REUSEADDR is a socket option that allows the socket to be reused immediately after closing. yes sets this option to 1.
-
-    int bind_result = bind(server_state.server_socket, res->ai_addr, res->ai_addrlen); // bind the socket, which by itself just reads or write things, to a port/address where it should write to or read from
-    if (bind_result < 0) {
-        perror("bind");
-        freeaddrinfo(res);
-        return -1;
-    }
-
-    freeaddrinfo(res);
-
-    int listen_result = listen(server_state.server_socket, BACKLOG); // the socket now starts to listen there
-    if (listen_result < 0) {
-        perror("listen");
-        return -1;
-    }
-
+    
     server_state.epfd = epoll_create1(0); // create an epoll instance
     if (server_state.epfd < 0) {
         perror("epoll_create1");
@@ -589,11 +809,15 @@ int server_run(void) {
     }
 
     struct epoll_event ev;
-    struct epoll_event events[MAX_EVENTS];
 
     ev.events = EPOLLIN;
-    ev.data.fd = server_state.server_socket;
-    epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, server_state.server_socket, &ev);
+    ev.data.fd = server_state.http_socket;
+    epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, server_state.http_socket, &ev);
+
+    if (server_state.https_socket >= 0) {
+        ev.data.fd = server_state.https_socket;
+        epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, server_state.https_socket, &ev);
+    }
 
     // Add timer to epoll
     int timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
@@ -612,6 +836,8 @@ int server_run(void) {
     timer_ev.data.fd = timer_fd;
     epoll_ctl(server_state.epfd, EPOLL_CTL_ADD, timer_fd, &timer_ev);
 
+    struct epoll_event events[MAX_EVENTS];
+
     while (1){
 
         int n = epoll_wait(server_state.epfd, events, MAX_EVENTS, -1);
@@ -621,8 +847,11 @@ int server_run(void) {
         }
 
         for (int i = 0; i < n; i++) {
-            if (events[i].data.fd == server_state.server_socket) {
-                handle_new_connection(&server_state);
+            int fd = events[i].data.fd;
+            if (fd == server_state.http_socket) {
+                handle_new_connection(&server_state, 0);
+            } else if (fd == server_state.https_socket) {
+                handle_new_connection(&server_state, 1);
             } else if (events[i].data.fd == timer_fd) {
                 size_t expirations;
                 read(timer_fd, &expirations, sizeof(expirations));

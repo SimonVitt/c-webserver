@@ -3,6 +3,7 @@
 
 #include <time.h>
 #include <sys/time.h>
+#include <openssl/ssl.h>
 #include "./http.h"
 
 #define BUF_SIZE 8192
@@ -13,7 +14,8 @@ typedef enum {
     CLIENT_STATE_SENDING_100_CONTINUE = 2,
     CLIENT_STATE_RECEIVING_BODY = 3,
     CLIENT_STATE_SENDING_RESPONSE = 4,
-    CLIENT_STATE_NO_CONNECTION = 5
+    CLIENT_STATE_NO_CONNECTION = 5,
+    CLIENT_STATE_SSL_HANDSHAKE = 6
 } ClientState;
 
 typedef struct {
@@ -37,8 +39,10 @@ typedef struct {
     size_t bytes_sent;
 
     size_t continue_bytes_sent; // How much of 100 Continue we've sent
+
+    SSL* ssl;
 } Client;
 
-int server_run(void);
+int server_run(const char* http_port, const char* https_port, const char* cert_file, const char* key_file);
 
 #endif 
