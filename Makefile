@@ -1,7 +1,15 @@
 CC = gcc
 CFLAGS = -std=gnu99 -Wall -Werror -Iinclude
 LDFLAGS = -lssl -lcrypto
-SRC = src/main.c src/server.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c src/static_file.c
+SRC = src/main.c \
+      src/server.c \
+      src/http.c \
+      src/static_file.c \
+      src/connection.c \
+      src/ssl_handler.c \
+      src/request_handler.c \
+      src/utils/string_hashmap.c \
+      src/utils/string_builder.c
 TESTS_HTTP = tests/test_http.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c src/static_file.c
 TESTS_STATIC = tests/test_static_file.c src/static_file.c src/http.c src/utils/string_hashmap.c src/utils/string_builder.c
 

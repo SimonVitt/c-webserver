@@ -43,6 +43,16 @@ typedef struct {
     SSL* ssl;
 } Client;
 
+typedef struct {
+    Client* clients; // We use an array of clients to store the clients that are connected to the server. the client will always be at the index of the file descriptor of the socket. We dont use a hashmap because this would cause of memory overhead (more often mallocing and freeing memory).
+    int epfd; // epoll file descriptor
+    int http_socket;
+    int https_socket;
+    int active_connections;
+    int* active_fds;
+    SSL_CTX* ssl_ctx; //SSL context (NULL if not using HTTPS)
+} ServerState;
+
 int server_run(const char* http_port, const char* https_port, const char* cert_file, const char* key_file);
 
 #endif 
