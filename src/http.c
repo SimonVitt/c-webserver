@@ -97,7 +97,7 @@ enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRe
     req->version[sizeof(req->version) - 1] = '\0'; // Just safety if method overflowed and the last byte is not null
 
     // Normalize version
-    for (char *p = req->method; *p; ++p)
+    for (char *p = req->version; *p; ++p)
         *p = (char)toupper((unsigned char)*p);
 
     // normalize method
