@@ -1,6 +1,6 @@
-#include "./../include/connection.h"
-#include "./../include/config.h"
-#include "./../include/ssl_handler.h"
+#include "connection.h"
+#include "config.h"
+#include "ssl_handler.h"
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <unistd.h>

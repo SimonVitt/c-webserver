@@ -13,13 +13,13 @@
 #include <errno.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include "./../include/ssl_handler.h"
-#include "./../include/http.h"
-#include "./../include/static_file.h"
-#include "./../include/server.h"
-#include "./../include/config.h"
-#include "./../include/connection.h"
-#include "./../include/request_handler.h"
+#include "ssl_handler.h"
+#include "http.h"
+#include "static_file.h"
+#include "server.h"
+#include "config.h"
+#include "connection.h"
+#include "request_handler.h"
 
 typedef enum {
     HANDLE_SUCCESS = 0, // Continue processing

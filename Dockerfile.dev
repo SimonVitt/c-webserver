@@ -1,11 +1,10 @@
-# Use Alpine-based GCC (much smaller: ~200MB vs 1.5GB)
-FROM alpine:latest
+FROM debian:bookworm-slim
 
-# Install only what you need
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    musl-dev \
+    libc6-dev \
     make \
-    openssl-dev
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

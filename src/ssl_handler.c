@@ -1,5 +1,5 @@
-#include "./../include/ssl_handler.h"
-#include "./../include/connection.h"
+#include "ssl_handler.h"
+#include "connection.h"
 #include <sys/epoll.h>
 #include <openssl/err.h>
 

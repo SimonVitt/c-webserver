@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#include "./../include/utils/string_hashmap.h"
+#include "utils/string_hashmap.h"
 
 #define HASHMAP_INITIAL_CAPACITY 16
 #define HASHMAP_GROWTH_FACTOR 2

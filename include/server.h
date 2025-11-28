@@ -4,7 +4,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <openssl/ssl.h>
-#include "./http.h"
+#include "http.h"
 
 #define BUF_SIZE 8192
 

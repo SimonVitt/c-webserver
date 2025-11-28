@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <openssl/ssl.h>
-#include "./server.h"
+#include "server.h"
 
 typedef enum {
     CONN_IO_SUCCESS = 0,      // Success, bytes read/written

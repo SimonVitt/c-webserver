@@ -5,10 +5,10 @@
 #include <limits.h>
 #include <time.h>
 
-#include "./../include/http.h"
-#include "./../include/utils/string_builder.h"
-#include "./../include/utils/string_hashmap.h"
-#include "./../include/static_file.h"
+#include "http.h"
+#include "utils/string_builder.h"
+#include "utils/string_hashmap.h"
+#include "static_file.h"
 
 #define PUBLIC_DIR "./public"
 
@@ -99,17 +99,18 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
     if (file == NULL) {
         return -1;
     }
-    char *content = malloc(st->st_size); // create a buffer to store the file content
+    char *content = malloc(st->st_size + 1); // +1 for null terminator
     if (content == NULL) {
         fclose(file);
         return -1;
     }
     size_t read_result = fread(content, 1, st->st_size, file); // read the file content
-    if (read_result != st->st_size) { // if the read result is not the same as the file size, return -1
+    if (read_result != (size_t)st->st_size) { // if the read result is not the same as the file size, return -1
         free(content);
         fclose(file);
         return -1;
     }
+    content[st->st_size] = '\0'; // null-terminate for safety
     response->body_length = st->st_size;
     fclose(file);
     response->body = content; // set the body of the response

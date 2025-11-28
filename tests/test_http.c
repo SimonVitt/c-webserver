@@ -7,7 +7,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
-#include "./../include/http.h"
+#include "http.h"
 
 /* === Request Parsing Tests === */
 

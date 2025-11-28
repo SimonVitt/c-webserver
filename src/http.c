@@ -2,9 +2,9 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <time.h>
-#include "./../include/http.h"
-#include "./../include/utils/string_builder.h"
-#include "./../include/utils/string_hashmap.h"
+#include "http.h"
+#include "utils/string_builder.h"
+#include "utils/string_hashmap.h"
 
 int get_current_time_string(char* time_string_buffer, size_t time_string_buffer_size) {
     time_t now = time(NULL);
@@ -301,7 +301,9 @@ int response_to_buffer(HttpResponse* res, char** buffer) {
     
     string_builder_length(sb, &res->headers_length);
 
-    string_builder_append_string_n(sb, res->body, res->body_length);
+    if (res->body != NULL && res->body_length > 0) {
+        string_builder_append_string_n(sb, res->body, res->body_length);
+    }
 
     string_builder_to_string(sb, buffer);
 

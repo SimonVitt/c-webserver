@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include "./../include/server.h"
+#include "server.h"
 
 int main(int argc, char* argv[]) {
 

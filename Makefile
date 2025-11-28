@@ -1,6 +1,7 @@
 CC = gcc
-CFLAGS = -std=gnu99 -Wall -Werror -Iinclude
+CFLAGS = -std=gnu99 -D_GNU_SOURCE -Wall -Werror -Iinclude
 LDFLAGS_SSL = -lssl -lcrypto
+SANITIZE_FLAGS = -g -fsanitize=address,undefined -fno-omit-frame-pointer
 DOCKER_RUN = docker compose -f docker-compose-dev.yml run --rm --service-ports webserver
 
 # Main server sources
@@ -46,6 +47,10 @@ TEST_REQUEST_HANDLER_OUT = test_request_handler
 all:
 	$(CC) $(SRC) -o $(OUT) $(CFLAGS) $(LDFLAGS_SSL)
 
+# Debug build with sanitizers (ASan + UBSan)
+debug:
+	$(CC) $(SRC) -o $(OUT) $(CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS_SSL)
+
 # Individual test compilation (native - for use inside Docker)
 test-http:
 	$(CC) $(TESTS_HTTP) -o $(TEST_HTTP_OUT) $(CFLAGS)
@@ -84,9 +89,21 @@ test-static-run:
 test-request-handler-run:
 	$(DOCKER_RUN) sh -c "make test-request-handler && ./$(TEST_REQUEST_HANDLER_OUT)"
 
+# Run server with sanitizers (ASan + UBSan)
+run-debug:
+	$(DOCKER_RUN) sh -c "make debug && ./$(OUT) --http-port 8080 --https-port 8443 --cert ssl_files/localhost.pem --key ssl_files/localhost-key.pem"
+
+# Run tests with sanitizers
+test-sanitize:
+	$(DOCKER_RUN) sh -c "make clean && \
+		$(CC) $(TESTS_HTTP) -o $(TEST_HTTP_OUT) $(CFLAGS) $(SANITIZE_FLAGS) && \
+		$(CC) $(TESTS_STATIC) -o $(TEST_STATIC_OUT) $(CFLAGS) $(SANITIZE_FLAGS) && \
+		$(CC) $(TESTS_REQUEST_HANDLER) -o $(TEST_REQUEST_HANDLER_OUT) $(CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS_SSL) && \
+		./$(TEST_HTTP_OUT) && ./$(TEST_STATIC_OUT) && ./$(TEST_REQUEST_HANDLER_OUT)"
+
 # Cleanup
 clean:
 	rm -f $(OUT) $(TEST_HTTP_OUT) $(TEST_STATIC_OUT) $(TEST_REQUEST_HANDLER_OUT)
 
-.PHONY: all run run-rebuild build clean test test-http test-static test-request-handler \
-        test-run test-http-run test-static-run test-request-handler-run
+.PHONY: all debug run run-rebuild run-debug build clean test test-http test-static test-request-handler \
+        test-run test-http-run test-static-run test-request-handler-run test-sanitize

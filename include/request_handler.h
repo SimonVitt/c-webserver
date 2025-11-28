@@ -1,7 +1,7 @@
 #ifndef REQUEST_HANDLER_H
 #define REQUEST_HANDLER_H
 
-#include "./../include/server.h"
+#include "server.h"
 
 int handle_http_request(Client* client);
 int send_100_continue(int fd, Client* client, ServerState* server_state);

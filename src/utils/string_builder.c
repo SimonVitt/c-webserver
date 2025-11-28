@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include "./../include/utils/string_builder.h"
+#include "utils/string_builder.h"
 
 #define DEFAULT_STRING_BUILDER_STRING_CAPACITY 4096
 #define STRING_BUILDER_GROWTH_FACTOR 2
@@ -119,6 +119,9 @@ enum string_builder_error string_builder_append_string(struct string_builder_t* 
 }
 
 enum string_builder_error string_builder_append_string_n(struct string_builder_t* sb, const char* str, size_t n){
+    if (n == 0) {
+        return STRING_BUILDER_SUCCESS;  // Nothing to append
+    }
     enum string_builder_error ensure_cap_res = string_builder_ensure_capacity(sb, n);
     if (ensure_cap_res != STRING_BUILDER_SUCCESS){
         return ensure_cap_res;

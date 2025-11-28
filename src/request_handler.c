@@ -5,11 +5,11 @@
 #include <sys/epoll.h>
 #include <errno.h>
 #include <openssl/err.h>
-#include "./../include/http.h"
-#include "./../include/static_file.h"
-#include "./../include/utils/string_hashmap.h"
-#include "./../include/request_handler.h"
-#include "./../include/connection.h"
+#include "http.h"
+#include "static_file.h"
+#include "utils/string_hashmap.h"
+#include "request_handler.h"
+#include "connection.h"
 
 static int init_client_request(Client* client) {
     if (client->request == NULL) {

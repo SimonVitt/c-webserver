@@ -8,8 +8,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include "./../include/http.h"
-#include "./../include/static_file.h"
+#include "http.h"
+#include "static_file.h"
 
 /* === Helper Functions === */
 

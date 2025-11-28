@@ -1,7 +1,7 @@
 #ifndef HTTP_H
 #define HTTP_H
 
-#include "./../include/utils/string_hashmap.h"
+#include "utils/string_hashmap.h"
 
 typedef struct {
     char method[8];   // "GET", "POST", etc.

@@ -7,9 +7,9 @@
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
-#include "./../include/server.h"
-#include "./../include/http.h"
-#include "./../include/request_handler.h"
+#include "server.h"
+#include "http.h"
+#include "request_handler.h"
 
 /* === Helper Functions === */
 

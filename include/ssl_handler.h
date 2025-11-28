@@ -2,7 +2,7 @@
 #define SSL_HANDLER_H
 
 #include <openssl/ssl.h>
-#include "./../include/server.h"
+#include "server.h"
 
 typedef enum {
     SSL_HANDSHAKE_SUCCESS = 0,      // Handshake complete, continue
