@@ -1,4 +1,5 @@
-.webserver
-.test_http
-.test_static_file
+webserver
+test_http
+test_static_file
+test_request_handler
 **/*.pem
