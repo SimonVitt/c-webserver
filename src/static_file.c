@@ -46,26 +46,23 @@ int set_content_type(HttpResponse* response, const char* ext) {
     } else {
         strcpy(content_type, "application/octet-stream");
     }
-    char content_type_key[] = "Content-Type";
-    string_hashmap_put(response->headers, content_type_key, content_type, strlen(content_type_key), strlen(content_type));
+    string_hashmap_put_case_insensitive(response->headers, "Content-Type", content_type, 12, strlen(content_type));
     return 0;
 }
 
 int set_content_length(HttpResponse* response, size_t content_length) {
-    char content_length_key[] = "Content-Length";
     char content_length_value[256];
     snprintf(content_length_value, 256, "%zu", content_length);
-    string_hashmap_put(response->headers, content_length_key, content_length_value, strlen(content_length_key), strlen(content_length_value));
+    string_hashmap_put_case_insensitive(response->headers, "Content-Length", content_length_value, 14, strlen(content_length_value));
     return 0;
 }
 
 int set_last_modified(HttpResponse* response, time_t last_modified) {
-    char last_modified_key[] = "Last-Modified";
     char last_modified_value[64];
     struct tm* gmt = gmtime(&last_modified);
     if (gmt != NULL) {
         strftime(last_modified_value, sizeof(last_modified_value), "%a, %d %b %Y %H:%M:%S GMT", gmt);
-        string_hashmap_put(response->headers, last_modified_key, last_modified_value,strlen(last_modified_key), strlen(last_modified_value));
+        string_hashmap_put_case_insensitive(response->headers, "Last-Modified", last_modified_value, 13, strlen(last_modified_value));
     }
     return 0;
 }

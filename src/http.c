@@ -72,40 +72,57 @@ static int has_bare_cr(const char* buffer, size_t buffer_len) {
 }
 
 enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRequest* req) {
-
-    char* buffer_copy = malloc(sizeof(char) * (strlen(buffer) + 1));
-    strcpy(buffer_copy, buffer);
+    // Find the end of the first line
+    char* line_end = strstr(buffer, "\r\n");
+    if (line_end == NULL) {
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
+    
+    // Copy only the first line
+    size_t line_len = line_end - buffer;
+    char* first_line = malloc(line_len + 1);
+    if (first_line == NULL) {
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
+    memcpy(first_line, buffer, line_len);
+    first_line[line_len] = '\0';
+    
+    // Parse: METHOD SP PATH SP VERSION
     char *saveptr;
-
-    char *method = strtok_r(buffer_copy, " ", &saveptr); // strtok_r already sets the null terminator
+    char *method = strtok_r(first_line, " ", &saveptr);
     char *path = strtok_r(NULL, " ", &saveptr);
-    char *http_version = strtok_r(NULL, "\r\n", &saveptr);
-
-    if (http_version == NULL || method == NULL || path == NULL) {
-        free(buffer_copy);
+    char *http_version = strtok_r(NULL, " ", &saveptr); // Should be last token
+    char *extra = strtok_r(NULL, " ", &saveptr); // Should be NULL
+    
+    // Validate: must have exactly 3 parts
+    if (method == NULL || path == NULL || http_version == NULL || extra != NULL) {
+        free(first_line);
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
+    
+    // Validate version format starts with HTTP/
+    if (strncmp(http_version, "HTTP/", 5) != 0) {
+        free(first_line);
         return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
     }
 
-    strncpy(req->method, method, sizeof(req->method) - 1); // safe copy
-    req->method[sizeof(req->method) - 1] = '\0'; // Just safety if method overflowed and the last byte is not null
+    strncpy(req->method, method, sizeof(req->method) - 1);
+    req->method[sizeof(req->method) - 1] = '\0';
 
     strncpy(req->path, path, sizeof(req->path) - 1);
-    req->path[sizeof(req->path) - 1] = '\0'; // Just safety if method overflowed and the last byte is not null
+    req->path[sizeof(req->path) - 1] = '\0';
     url_decode(req->path, req->path);
 
     strncpy(req->version, http_version, sizeof(req->version) - 1);
-    req->version[sizeof(req->version) - 1] = '\0'; // Just safety if method overflowed and the last byte is not null
+    req->version[sizeof(req->version) - 1] = '\0';
 
-    // Normalize version
+    // Normalize version and method to uppercase
     for (char *p = req->version; *p; ++p)
         *p = (char)toupper((unsigned char)*p);
-
-    // normalize method
     for (char *p = req->method; *p; ++p)
         *p = (char)toupper((unsigned char)*p);
 
-
-    free(buffer_copy);
+    free(first_line);
     return PARSE_HTTP_REQUEST_SUCCESS;
 }
 
@@ -227,27 +244,23 @@ int get_default_response(HttpResponse* res, HttpRequest* req) {
     if (res->headers == NULL) {
         return -1;
     }
-    char server_key[] = "Server";
-    char server_value[] = "C-WebServer/1.0";
-    string_hashmap_put(res->headers, server_key, server_value, strlen(server_key), strlen(server_value));
+    
+    // Use case-insensitive put for consistent lookups
+    string_hashmap_put_case_insensitive(res->headers, "Server", "C-WebServer/1.0", 6, 15);
 
-    char date_key[] = "Date";
     char date_value[64];
     get_current_time_string(date_value, sizeof(date_value));
-    string_hashmap_put(res->headers, date_key, date_value, strlen(date_key), strlen(date_value));
+    string_hashmap_put_case_insensitive(res->headers, "Date", date_value, 4, strlen(date_value));
 
-    char connection_key[] = "Connection";
     char* client_connection_value = NULL;
-    if (string_hashmap_get_case_insensitive(req->headers, "Connection", strlen("Connection"), &client_connection_value) == HASHMAP_SUCCESS && client_connection_value != NULL && strlen(client_connection_value) > 0) {
+    if (string_hashmap_get_case_insensitive(req->headers, "Connection", 10, &client_connection_value) == HASHMAP_SUCCESS && client_connection_value != NULL && strlen(client_connection_value) > 0) {
         // Client specified Connection header - use their value
-        string_hashmap_put(res->headers, connection_key, client_connection_value, strlen(connection_key), strlen(client_connection_value));
+        string_hashmap_put_case_insensitive(res->headers, "Connection", client_connection_value, 10, strlen(client_connection_value));
     } else {
         if (is_http_1_1(req)) {
-            char connection_value[] = "keep-alive";
-            string_hashmap_put(res->headers, connection_key, connection_value, strlen(connection_key), strlen(connection_value));
+            string_hashmap_put_case_insensitive(res->headers, "Connection", "keep-alive", 10, 10);
         } else {
-            char connection_value[] = "close";
-            string_hashmap_put(res->headers, connection_key, connection_value, strlen(connection_key), strlen(connection_value));
+            string_hashmap_put_case_insensitive(res->headers, "Connection", "close", 10, 5);
         }
     }
 
@@ -255,30 +268,14 @@ int get_default_response(HttpResponse* res, HttpRequest* req) {
 }
 
 int add_security_headers(HttpResponse* res, int is_https) {
-    // X-Content-Type-Options: nosniff
-    char x_content_type_key[] = "X-Content-Type-Options";
-    char x_content_type_value[] = "nosniff";
-    string_hashmap_put(res->headers, x_content_type_key, x_content_type_value, 
-                       strlen(x_content_type_key), strlen(x_content_type_value));
+    // Use case-insensitive put for consistent lookups
+    string_hashmap_put_case_insensitive(res->headers, "X-Content-Type-Options", "nosniff", 22, 7);
+    string_hashmap_put_case_insensitive(res->headers, "X-Frame-Options", "DENY", 15, 4);
+    string_hashmap_put_case_insensitive(res->headers, "X-XSS-Protection", "1; mode=block", 16, 13);
 
-    // X-Frame-Options: DENY
-    char x_frame_key[] = "X-Frame-Options";
-    char x_frame_value[] = "DENY";
-    string_hashmap_put(res->headers, x_frame_key, x_frame_value, 
-                       strlen(x_frame_key), strlen(x_frame_value));
-
-    // X-XSS-Protection: 1; mode=block
-    char x_xss_key[] = "X-XSS-Protection";
-    char x_xss_value[] = "1; mode=block";
-    string_hashmap_put(res->headers, x_xss_key, x_xss_value, 
-                       strlen(x_xss_key), strlen(x_xss_value));
-
-    // Strict-Transport-Security (only for HTTPS)
     if (is_https) {
-        char hsts_key[] = "Strict-Transport-Security";
-        char hsts_value[] = "max-age=31536000; includeSubDomains";
-        string_hashmap_put(res->headers, hsts_key, hsts_value, 
-                           strlen(hsts_key), strlen(hsts_value));
+        string_hashmap_put_case_insensitive(res->headers, "Strict-Transport-Security", 
+                                            "max-age=31536000; includeSubDomains", 25, 35);
     }
 
     return 0;
