@@ -27,7 +27,7 @@ typedef enum {
     HANDLE_ERROR = -1 // Fatal error
 } handle_result_t;
 
-void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
+static void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     
@@ -226,7 +226,7 @@ static handle_result_t handle_sending_response_state(int fd, Client* client, Ser
     return handle_response_complete(fd, client, server_state);
 }
 
-int handle_client_receive(int fd, ServerState* server_state) {
+static int handle_client_receive(int fd, ServerState* server_state) {
     Client* client = &server_state->clients[fd];
     handle_result_t result;
 

@@ -12,7 +12,7 @@
 
 #define PUBLIC_DIR "./public"
 
-int set_content_type(HttpResponse* response, const char* ext) {
+static int set_content_type(HttpResponse* response, const char* ext) {
     char content_type[256];
     if (strcmp(ext, ".html") == 0) {
         strcpy(content_type, "text/html");
@@ -50,14 +50,14 @@ int set_content_type(HttpResponse* response, const char* ext) {
     return 0;
 }
 
-int set_content_length(HttpResponse* response, size_t content_length) {
+static int set_content_length(HttpResponse* response, size_t content_length) {
     char content_length_value[256];
     snprintf(content_length_value, 256, "%zu", content_length);
     string_hashmap_put_case_insensitive(response->headers, "Content-Length", content_length_value, 14, strlen(content_length_value));
     return 0;
 }
 
-int set_last_modified(HttpResponse* response, time_t last_modified) {
+static int set_last_modified(HttpResponse* response, time_t last_modified) {
     char last_modified_value[64];
     struct tm* gmt = gmtime(&last_modified);
     if (gmt != NULL) {
@@ -67,7 +67,7 @@ int set_last_modified(HttpResponse* response, time_t last_modified) {
     return 0;
 }
 
-int parse_http_date(const char* date_str, time_t* result) {
+static int parse_http_date(const char* date_str, time_t* result) {
     struct tm tm = {0};
     // Try RFC 1123 format: "Wed, 09 Jun 2021 10:18:14 GMT"
     char* parsed = strptime(date_str, "%a, %d %b %Y %H:%M:%S GMT", &tm);
@@ -78,7 +78,7 @@ int parse_http_date(const char* date_str, time_t* result) {
     return 0;
 }
 
-int check_if_modified_since(time_t file_mtime, const char* if_modified_since_str) {
+static int check_if_modified_since(time_t file_mtime, const char* if_modified_since_str) {
     if (if_modified_since_str == NULL || strlen(if_modified_since_str) == 0) {
         return 1; // No header, send file
     }
@@ -93,7 +93,7 @@ int check_if_modified_since(time_t file_mtime, const char* if_modified_since_str
     return (file_mtime > client_date) ? 1 : 0;
 }
 
-int set_data_in_response(HttpResponse* response, const char* file_path, struct stat* st) {
+static int set_data_in_response(HttpResponse* response, const char* file_path, struct stat* st) {
 
     FILE* file = fopen(file_path, "rb"); // open the file
     if (file == NULL) {
@@ -125,7 +125,7 @@ int set_data_in_response(HttpResponse* response, const char* file_path, struct s
     return 0;
 }
 
-int set_error_response(HttpResponse* response, const char* status_code, const char* status_message, const char* file_path) {
+static int set_error_response(HttpResponse* response, const char* status_code, const char* status_message, const char* file_path) {
     strcpy(response->status_code, status_code);
     strcpy(response->status_message, status_message);
 

@@ -6,7 +6,7 @@
 #include "utils/string_builder.h"
 #include "utils/string_hashmap.h"
 
-int get_current_time_string(char* time_string_buffer, size_t time_string_buffer_size) {
+static int get_current_time_string(char* time_string_buffer, size_t time_string_buffer_size) {
     time_t now = time(NULL);
     struct tm* gmt = gmtime(&now);
     if (gmt == NULL) {
@@ -19,11 +19,11 @@ int get_current_time_string(char* time_string_buffer, size_t time_string_buffer_
     return 0;
 }
 
-int from_hex(char c) {
+static int from_hex(char c) {
     return isdigit(c) ? c - '0' : tolower(c) - 'a' + 10;
 }
 
-void url_decode(const char *src, char *dest) {
+static void url_decode(const char *src, char *dest) {
     while (*src) {
         if (*src == '%' && isxdigit(src[1]) && isxdigit(src[2])) {
             *dest = from_hex(src[1]) * 16 + from_hex(src[2]);
@@ -71,7 +71,7 @@ static int has_bare_cr(const char* buffer, size_t buffer_len) {
     return 0; // No bare CR
 }
 
-enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRequest* req) {
+static enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRequest* req) {
     // Find the end of the first line
     char* line_end = strstr(buffer, "\r\n");
     if (line_end == NULL) {
@@ -126,7 +126,7 @@ enum parse_http_request_error parse_http_request_line(const char* buffer, HttpRe
     return PARSE_HTTP_REQUEST_SUCCESS;
 }
 
-enum parse_http_request_error parse_http_request_headers_internal(const char* buffer, HttpRequest* req) {
+static enum parse_http_request_error parse_http_request_headers_internal(const char* buffer, HttpRequest* req) {
     char* buffer_copy = malloc(sizeof(char) * (strlen(buffer) + 1));
     strcpy(buffer_copy, buffer);
 
@@ -287,7 +287,7 @@ int free_http_response(HttpResponse* res) {
     return 0;
 }
 
-int response_header_append_callback(const char* key, size_t key_len, const char* value, size_t value_len, void* user_data) {
+static int response_header_append_callback(const char* key, size_t key_len, const char* value, size_t value_len, void* user_data) {
     string_builder_append_format((struct string_builder_t*)user_data, "%s: %s\r\n", key, value);
     return 0;
 }
