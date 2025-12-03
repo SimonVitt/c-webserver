@@ -3,3 +3,5 @@ test_http
 test_static_file
 test_request_handler
 **/*.pem
+html/
+latex/

@@ -39,14 +39,26 @@ static void log_request(HttpRequest* req, HttpResponse* res, double time_ms) {
     int ms = (int)(tv.tv_usec / 1000);
     snprintf(timestamp_with_ms, sizeof(timestamp_with_ms), "%s.%03d", timestamp, ms);
     
-    printf("[REQUEST] [%s GMT] %s %s %s - %s %s (%.2fms)\n",
-           timestamp_with_ms,
-           req->method,
-           req->path,
-           req->version,
-           res->status_code,
-           res->status_message,
-           time_ms);
+    char log_line[1024];
+    snprintf(log_line, sizeof(log_line), 
+             "[REQUEST] [%s GMT] %s %s %s - %s %s (%.2fms)\n",
+             timestamp_with_ms,
+             req->method,
+             req->path,
+             req->version,
+             res->status_code,
+             res->status_message,
+             time_ms);
+    
+    // Log to stdout
+    printf("%s", log_line);
+    
+    // Log to file (if writable)
+    FILE* log_file = fopen(LOG_FILE, "a");
+    if (log_file != NULL) {
+        fprintf(log_file, "%s", log_line);
+        fclose(log_file);
+    }
 }
 
 static handle_result_t handle_ssl_handshake_state(int fd, Client* client, ServerState* server_state) {

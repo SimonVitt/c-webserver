@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "http.h"
+#include "config.h"
 #include "utils/string_builder.h"
 #include "utils/string_hashmap.h"
 
@@ -78,8 +79,12 @@ static enum parse_http_request_error parse_http_request_line(const char* buffer,
         return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
     }
     
-    // Copy only the first line
+    // Check request line length limit
     size_t line_len = line_end - buffer;
+    if (line_len > MAX_REQUEST_LINE) {
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
+    
     char* first_line = malloc(line_len + 1);
     if (first_line == NULL) {
         return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
@@ -128,14 +133,22 @@ static enum parse_http_request_error parse_http_request_line(const char* buffer,
 
 static enum parse_http_request_error parse_http_request_headers_internal(const char* buffer, HttpRequest* req) {
     char* buffer_copy = malloc(sizeof(char) * (strlen(buffer) + 1));
+    if (buffer_copy == NULL) {
+        return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+    }
     strcpy(buffer_copy, buffer);
 
     char *saveptr;
     char *line = strtok_r(buffer_copy, "\n", &saveptr);
     line = strtok_r(NULL, "\n", &saveptr); // We skip the first line, since this is the request line
 
-    
+    int header_count = 0;
     for (; line != NULL; line = strtok_r(NULL, "\n", &saveptr)) {
+        // Limit number of headers to prevent abuse
+        if (++header_count > MAX_HEADERS) {
+            free(buffer_copy);
+            return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;
+        }
 
         char *p = line;
         size_t len = strlen(line);

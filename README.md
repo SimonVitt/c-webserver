@@ -51,8 +51,10 @@ curl -k https://localhost:8443
 |---------|-------------|
 | `make run` | Start server (Docker) |
 | `make run-rebuild` | Rebuild and start |
-| `make build` | Build Docker image only |
+| `make run-debug` | Run with AddressSanitizer |
 | `make test-run` | Run all tests |
+| `make test-sanitize` | Run tests with sanitizers |
+| `make build` | Build Docker image only |
 | `make clean` | Remove binaries |
 
 ---
@@ -99,6 +101,17 @@ make test-run
 
 # Load test
 ab -n 1000 -c 100 http://localhost:8080/
+```
+
+---
+
+## Documentation
+
+documentation can be generated with Doxygen:
+
+```bash
+doxygen Doxyfile
+open html/index.html
 ```
 
 ---

@@ -1,3 +1,8 @@
+/**
+ * @file server.h
+ * @brief Core server types and entry point
+ */
+
 #ifndef SERVER_H
 #define SERVER_H
 
@@ -8,6 +13,7 @@
 
 #define BUF_SIZE 8192
 
+/** @brief Client connection state machine states */
 typedef enum {
     CLIENT_STATE_IDLE = 0,
     CLIENT_STATE_RECEIVING_HEADERS = 1,
@@ -18,41 +24,44 @@ typedef enum {
     CLIENT_STATE_SSL_HANDSHAKE = 6
 } ClientState;
 
+/** @brief Per-connection state */
 typedef struct {
-    char buffer[BUF_SIZE];
-    size_t bytes_received;
-    
-    time_t last_activity;
-    ClientState state;
-    
-    HttpRequest* request;
-    
-    size_t headers_end_offset;
-    size_t content_length;
-    size_t body_bytes_received;
-
-    HttpResponse* response;
-    char* response_buffer;
-
-    struct timeval request_start;
-
-    size_t bytes_sent;
-
-    size_t continue_bytes_sent; // How much of 100 Continue we've sent
-
-    SSL* ssl;
+    char buffer[BUF_SIZE];         /**< Receive buffer */
+    size_t bytes_received;         /**< Bytes in buffer */
+    time_t last_activity;          /**< For timeout detection */
+    ClientState state;             /**< Current state machine state */
+    HttpRequest* request;          /**< Parsed request (owned) */
+    size_t headers_end_offset;     /**< Offset where body starts */
+    size_t content_length;         /**< Expected body length */
+    size_t body_bytes_received;    /**< Body bytes received so far */
+    HttpResponse* response;        /**< Response to send (owned) */
+    char* response_buffer;         /**< Serialized response (owned) */
+    struct timeval request_start;  /**< For request timing */
+    size_t bytes_sent;             /**< Response bytes sent */
+    size_t continue_bytes_sent;    /**< 100 Continue bytes sent */
+    SSL* ssl;                      /**< TLS session or NULL */
 } Client;
 
+/** @brief Global server state */
 typedef struct {
-    Client* clients; // We use an array of clients to store the clients that are connected to the server. the client will always be at the index of the file descriptor of the socket. We dont use a hashmap because this would cause of memory overhead (more often mallocing and freeing memory).
-    int epfd; // epoll file descriptor
-    int http_socket;
-    int https_socket;
+    Client* clients;       /**< Client array indexed by fd */
+    int epfd;              /**< epoll instance */
+    int http_socket;       /**< HTTP listen socket */
+    int https_socket;      /**< HTTPS listen socket or -1 */
     int active_connections;
-    int* active_fds;
-    SSL_CTX* ssl_ctx; //SSL context (NULL if not using HTTPS)
+    int* active_fds;       /**< List of active client fds */
+    SSL_CTX* ssl_ctx;      /**< TLS context or NULL */
 } ServerState;
 
-int server_run(const char* http_port, const char* https_port, const char* cert_file, const char* key_file);
+/**
+ * @brief Start the server event loop
+ * @param http_port   HTTP port (e.g. "8080")
+ * @param https_port  HTTPS port or NULL to disable
+ * @param cert_file   PEM certificate path or NULL
+ * @param key_file    PEM private key path or NULL
+ * @return 0 on clean exit, -1 on error
+ */
+int server_run(const char* http_port, const char* https_port, 
+               const char* cert_file, const char* key_file);
 
-#endif 
+#endif
