@@ -2,7 +2,7 @@
 
 A lightweight HTTP/1.1 web server written in C.
 
-No frameworks, no dependencies beyond OpenSSL. Built to deepen my knowledge of systems programming and network protocols.
+No external deps except OpenSSL. Built to deepen my knowledge of systems programming and network protocols.
 
 ---
 
