@@ -125,7 +125,7 @@ int connection_accept(ServerState* server_state, int is_https) {
         return -1;
     } else if (server_state->active_connections >= MAX_CLIENTS) {
         perror("Max clients reached\n");
-        close(new_fd); // we close directly without close_connection because we it wasnt a client yet and not counted in the active_connections
+        close(new_fd); // we close directly without close_connection because it wasnt a client yet and not counted in the active_connections
         return -1;
     }
 
@@ -144,7 +144,7 @@ int connection_accept(ServerState* server_state, int is_https) {
 
     if (epoll_add(server_state->epfd, new_fd, EPOLLIN) < 0) {
         perror("epoll_ctl: add client");
-        close(new_fd); // we close directly without close_connection because we it wasnt a client yet and not counted in the active_connections
+        close(new_fd); // we close directly without close_connection because it wasnt a client yet and not counted in the active_connections
         return -1;
     }
     server_state->active_fds[server_state->active_connections] = new_fd;

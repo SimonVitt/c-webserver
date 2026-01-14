@@ -170,14 +170,14 @@ static enum parse_http_request_error parse_http_request_headers_internal(const c
         while (isspace((unsigned char)*val)) val++; // trim leading spaces on val
 
         size_t len_key = strlen(key);
-        for (char *end = key + len_key; end > key && isspace((unsigned char)end[-1]); --end) { // trim leading spaces on key
-            end[-1] = '\0'; // sets previous isspace cahracter to null
+        for (char *end = key + len_key; end > key && isspace((unsigned char)end[-1]); --end) { // trim trailing spaces on key
+            end[-1] = '\0'; // sets previous isspace character to null
             len_key--;
         }
 
         size_t len_val = strlen(val);
         for (char *end = val + len_val; end > val && isspace((unsigned char)end[-1]); --end) { // trim trailing spaces on val
-            end[-1] = '\0'; // sets previous isspace cahracter to null
+            end[-1] = '\0'; // sets previous isspace character to null
             len_val--;
         }
 
@@ -198,7 +198,7 @@ int parse_http_request_headers(const char* buffer, HttpRequest* req) {
         return -1;
     }
 
-    // RFC 9112: Reject bare CR characters (MUST requirement)
+    // RFC 9112: Reject bare CR characters
     size_t buffer_len = strlen(buffer);
     if (has_bare_cr(buffer, buffer_len)) {
         return PARSE_HTTP_REQUEST_ERROR_INVALID_REQUEST;

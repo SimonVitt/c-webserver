@@ -48,20 +48,21 @@ typedef struct {
     int epfd;              /**< epoll instance */
     int http_socket;       /**< HTTP listen socket */
     int https_socket;      /**< HTTPS listen socket or -1 */
-    int active_connections;
+    int active_connections;  /**< count if active connections */
     int* active_fds;       /**< List of active client fds */
     SSL_CTX* ssl_ctx;      /**< TLS context or NULL */
 } ServerState;
 
 /**
  * @brief Start the server event loop
+ * @param bind_address Bind address (e.g. "127.0.0.1" or NULL for all interfaces)
  * @param http_port   HTTP port (e.g. "8080")
  * @param https_port  HTTPS port or NULL to disable
  * @param cert_file   PEM certificate path or NULL
  * @param key_file    PEM private key path or NULL
  * @return 0 on clean exit, -1 on error
  */
-int server_run(const char* http_port, const char* https_port, 
+int server_run(const char* bind_address, const char* http_port, const char* https_port, 
                const char* cert_file, const char* key_file);
 
 #endif

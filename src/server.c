@@ -278,16 +278,19 @@ static int handle_client_receive(int fd, ServerState* server_state) {
     return 0;
 }
 
-static int create_listening_socket(const char* port) {
+static int create_listening_socket(const char* bind_address, const char* port) {
     struct addrinfo hints, *res; // hints is where we put our own data and say how we want a connection. Res is a pointer to a linked list with possible addresses
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC; // use IPv4 or IPv6
     hints.ai_socktype = SOCK_STREAM; // use TCP
     hints.ai_flags = AI_PASSIVE; // fill in my IP for me
 
-    int getaddrinfo_result = getaddrinfo(NULL, port, &hints, &res);
+    // Use bind_address if provided, otherwise NULL (all interfaces)
+    int getaddrinfo_result = getaddrinfo(bind_address, port, &hints, &res);
     if (getaddrinfo_result != 0) {
-        fprintf(stderr, "getaddrinfo for port %s: %s\n", port, gai_strerror(getaddrinfo_result));
+        fprintf(stderr, "getaddrinfo for %s:%s: %s\n", 
+                bind_address ? bind_address : "all interfaces", 
+                port, gai_strerror(getaddrinfo_result));
         return -1;
     }
 
@@ -350,22 +353,27 @@ static int server_init(ServerState* server_state, const char* cert_file, const c
     return 0;
 }
 
-static int server_setup_sockets(ServerState* server_state, const char* http_port, const char* https_port, int* timer_fd) {
+static int server_setup_sockets(ServerState* server_state, const char* bind_address,
+                                const char* http_port, const char* https_port, int* timer_fd) {
     const char* http_port_str = http_port ? http_port : "8080";
-    server_state->http_socket = create_listening_socket(http_port_str);
+    server_state->http_socket = create_listening_socket(bind_address, http_port_str);
     if (server_state->http_socket < 0) {
-        fprintf(stderr, "Failed to create HTTP listening socket on port %s\n", http_port_str);
+        fprintf(stderr, "Failed to create HTTP listening socket on %s:%s\n", 
+                bind_address ? bind_address : "all interfaces", http_port_str);
         return -1;
     }
-    printf("[HTTP] Listening on port %s\n", http_port_str);
+    printf("[HTTP] Listening on %s:%s\n", 
+           bind_address ? bind_address : "0.0.0.0", http_port_str);
 
     if (server_state->ssl_ctx != NULL && https_port != NULL) {
-        server_state->https_socket = create_listening_socket(https_port);
+        server_state->https_socket = create_listening_socket(bind_address, https_port);
         if (server_state->https_socket < 0) {
-            fprintf(stderr, "Warning: Failed to create HTTPS socket on port %s, continuing with HTTP only\n", https_port);
+            fprintf(stderr, "Warning: Failed to create HTTPS socket on %s:%s, continuing with HTTP only\n", 
+                    bind_address ? bind_address : "all interfaces", https_port);
             server_state->https_socket = -1;
         } else {
-            printf("[HTTPS] Listening on port %s\n", https_port);
+            printf("[HTTPS] Listening on %s:%s\n", 
+                   bind_address ? bind_address : "0.0.0.0", https_port);
         }
     }
     
@@ -442,7 +450,7 @@ static void server_event_loop(ServerState* server_state, int timer_fd) {
     }
 }
 
-int server_run(const char* http_port, const char* https_port, const char* cert_file, const char* key_file) {
+int server_run(const char* bind_address, const char* http_port, const char* https_port, const char* cert_file, const char* key_file) {
     ServerState server_state;
     int timer_fd;
 
@@ -450,7 +458,7 @@ int server_run(const char* http_port, const char* https_port, const char* cert_f
         return -1;
     }
 
-    if (server_setup_sockets(&server_state, http_port, https_port, &timer_fd) < 0) {
+    if (server_setup_sockets(&server_state, bind_address, http_port, https_port, &timer_fd) < 0) {
         // Cleanup on error
         if (server_state.ssl_ctx != NULL) {
             SSL_CTX_free(server_state.ssl_ctx);

@@ -152,8 +152,9 @@ int serve_static_file(const char* path, HttpResponse* response, HttpRequest* req
 
     char file_path[PATH_MAX]; // create a buffer to store the file path
     int result;
+    int is_directory_request = (path[strlen(path) - 1] == '/' || strcmp(path, "/") == 0);
 
-    if (path[strlen(path) - 1] == '/' || strcmp(path, "/") == 0) {
+    if (is_directory_request) {
         // Directory request - serve index.html
         result = snprintf(file_path, PATH_MAX, "%s%sindex.html", PUBLIC_DIR, path);
     } else {
@@ -167,9 +168,21 @@ int serve_static_file(const char* path, HttpResponse* response, HttpRequest* req
 
     char resolved[PATH_MAX];
     if (!realpath(file_path, resolved)) { // resolve the path to an absolute path
+        // File doesn't exist - for non-directory requests, try appending .html (Next.js static export)
+        if (!is_directory_request) {
+            result = snprintf(file_path, PATH_MAX, "%s%s.html", PUBLIC_DIR, path);
+            if (result >= 0 && result < PATH_MAX) {
+                if (realpath(file_path, resolved)) {
+                    // Found path.html, continue with normal flow
+                    goto found_file;
+                }
+            }
+        }
         set_error_response(response, "404", "Not Found", ERROR_404_PATH);
         return 0;
     }
+
+found_file:
 
     char public_real[PATH_MAX];
     if (!realpath(PUBLIC_DIR, public_real)) {
@@ -185,10 +198,46 @@ int serve_static_file(const char* path, HttpResponse* response, HttpRequest* req
     }
 
     struct stat st;
-    if (stat(resolved, &st) != 0 || !S_ISREG(st.st_mode)) { // check if the path is a regular file
+    if (stat(resolved, &st) != 0) {
         set_error_response(response, "404", "Not Found", ERROR_404_PATH);
         return 0;
     }
+    
+    // If it's a directory and not a directory request, try path.html (Next.js static export)
+    if (S_ISDIR(st.st_mode) && !is_directory_request) {
+        result = snprintf(file_path, PATH_MAX, "%s%s.html", PUBLIC_DIR, path);
+        if (result >= 0 && result < PATH_MAX) {
+            if (realpath(file_path, resolved)) {
+                // Check it's still within public directory
+                if (strncmp(resolved, public_real, strlen(public_real)) == 0) {
+                    if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) {
+                        // Found path.html, continue with normal flow
+                        goto serve_file;
+                    }
+                }
+            }
+        }
+        // Also try path/index.html as fallback
+        result = snprintf(file_path, PATH_MAX, "%s%s/index.html", PUBLIC_DIR, path);
+        if (result >= 0 && result < PATH_MAX) {
+            if (realpath(file_path, resolved)) {
+                if (strncmp(resolved, public_real, strlen(public_real)) == 0) {
+                    if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) {
+                        goto serve_file;
+                    }
+                }
+            }
+        }
+        set_error_response(response, "404", "Not Found", ERROR_404_PATH);
+        return 0;
+    }
+    
+    if (!S_ISREG(st.st_mode)) { // check if the path is a regular file
+        set_error_response(response, "404", "Not Found", ERROR_404_PATH);
+        return 0;
+    }
+
+serve_file:
 
 
     char* if_modified_since = NULL;

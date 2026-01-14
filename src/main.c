@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "server.h"
 
 int main(int argc, char* argv[]) {
@@ -8,6 +9,7 @@ int main(int argc, char* argv[]) {
     const char* https_port = NULL;
     const char* cert_file = NULL;
     const char* key_file = NULL;
+    const char* bind_address = NULL;  // NULL means bind to all interfaces
 
     for (int i = 1; i < argc; i++) {
         if (i + 1 >= argc) break;
@@ -19,6 +21,8 @@ int main(int argc, char* argv[]) {
             cert_file = argv[++i];
         } else if (strcmp(argv[i], "--key") == 0) {
             key_file = argv[++i];
+        } else if (strcmp(argv[i], "--host") == 0 || strcmp(argv[i], "--bind") == 0) {
+            bind_address = argv[++i];
         }
     }
 
@@ -27,7 +31,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    if (server_run(http_port, https_port, cert_file, key_file) != 0) {
+    if (server_run(bind_address, http_port, https_port, cert_file, key_file) != 0) {
         return EXIT_FAILURE;
     }
 
