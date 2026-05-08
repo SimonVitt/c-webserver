@@ -118,6 +118,12 @@ static enum parse_http_request_error parse_http_request_line(const char* buffer,
     req->path[sizeof(req->path) - 1] = '\0';
     url_decode(req->path, req->path);
 
+    // Strip query string (everything after '?')
+    char *query = strchr(req->path, '?');
+    if (query) {
+        *query = '\0';
+    }
+
     strncpy(req->version, http_version, sizeof(req->version) - 1);
     req->version[sizeof(req->version) - 1] = '\0';
 

@@ -127,3 +127,37 @@ Defaults defined in `include/config.h`:
 | `BACKLOG` | 1024 | Listen queue size |
 
 ---
+
+## Production Deployment (Hetzner)
+
+The server runs on a Hetzner VPS (`ubuntu-4gb-nbg1-1`) under the `www-data` user.
+
+### Server Paths
+
+| Path | Description |
+|------|-------------|
+| `/srv/myserver/bin/webserver` | Server binary |
+| `/srv/myserver/public/` | Static files (web root) |
+| `/srv/myserver/logs/` | Log files |
+| `/srv/myserver/public/errors/` | Custom error pages (404, etc.) — do not overwrite |
+
+### How It Runs
+
+```
+/srv/myserver/bin/webserver --host 127.0.0.1 --http-port 8080
+```
+
+### Deploying the Portfolio (Next.js Static Export)
+
+The portfolio project at `~/Documents/development/frontend/portfolio` uses `next build` with `output: 'export'` to produce static files.
+
+```bash
+# 1. Build the static site locally
+cd ~/Documents/development/frontend/portfolio
+npm run build
+
+# 2. Copy to the server
+scp -r out/* root@ubuntu-4gb-nbg1-1:/srv/myserver/public/
+```
+
+> **Note:** Do not delete `/srv/myserver/public/errors/` — it contains the webserver's custom error pages.
